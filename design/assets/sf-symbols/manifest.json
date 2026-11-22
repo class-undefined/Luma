@@ -1,0 +1,60 @@
+{
+  "source": "Apple SF Symbols, rendered through AppKit NSImage(systemSymbolName:accessibilityDescription:)",
+  "purpose": "Design preview assets. Use system symbols directly in the native app.",
+  "point_size": 16,
+  "weight": "regular",
+  "canvas_points": [
+    24,
+    24
+  ],
+  "pixel_scale": 4,
+  "pixel_size": [
+    96,
+    96
+  ],
+  "themes": {
+    "light": "#383B40",
+    "dark": "#EBEDF2",
+    "accent": "#007AFF",
+    "secondary": "#878A91"
+  },
+  "documentation": "https://developer.apple.com/documentation/appkit/nsimage/init(systemsymbolname:accessibilitydescription:)",
+  "symbols": [
+    "arrow.counterclockwise",
+    "arrow.down.right.and.arrow.up.left",
+    "arrow.up.arrow.down",
+    "arrow.up.left.and.arrow.down.right",
+    "arrow.up.right.square",
+    "camera",
+    "checkmark",
+    "checkmark.circle.fill",
+    "chevron.down",
+    "chevron.left",
+    "chevron.right",
+    "clock",
+    "doc",
+    "ellipsis.circle",
+    "folder",
+    "folder.fill",
+    "heart",
+    "heart.fill",
+    "info.circle",
+    "list.bullet",
+    "magnifyingglass",
+    "minus",
+    "minus.magnifyingglass",
+    "photo",
+    "photo.on.rectangle",
+    "play.fill",
+    "plus",
+    "plus.magnifyingglass",
+    "rectangle.expand.vertical",
+    "sidebar.left",
+    "sidebar.right",
+    "slider.horizontal.3",
+    "square.and.arrow.up",
+    "square.grid.2x2",
+    "tag",
+    "xmark"
+  ]
+}

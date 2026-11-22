@@ -1,0 +1,127 @@
+{
+  "note": "Photography is used as design content. UI filenames, file sizes and EXIF values are demonstration data.",
+  "assets": [
+    {
+      "name": "01-cove",
+      "path": "01-cove.jpg",
+      "size": [
+        1800,
+        1200
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1554768707-a66bcfe69e89?auto=format&fit=max&w=1800&q=85",
+      "photographer": "Tyler Casey",
+      "source_page": "https://unsplash.com/photos/an-aerial-view-of-the-ocean-and-rocks-THL9QZxEZJY"
+    },
+    {
+      "name": "02-cliffs",
+      "path": "02-cliffs.jpg",
+      "size": [
+        1800,
+        1200
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1579619517684-b2c94ae8ec31?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "03-mist",
+      "path": "03-mist.jpg",
+      "size": [
+        1800,
+        1013
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1608063058695-76e28a32aa19?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "04-coast",
+      "path": "04-coast.jpg",
+      "size": [
+        1800,
+        1013
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1623124350876-fcc3c48ae01f?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "05-shore",
+      "path": "05-shore.jpg",
+      "size": [
+        1800,
+        1013
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1622758670264-f58914428669?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "06-ocean",
+      "path": "06-ocean.jpg",
+      "size": [
+        1800,
+        1200
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1518837695005-2083093ee35b?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "07-waves",
+      "path": "07-waves.jpg",
+      "size": [
+        1800,
+        2696
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1500375592092-40eb2168fd21?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "08-beach",
+      "path": "08-beach.jpg",
+      "size": [
+        1800,
+        1166
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1473116763249-2faaef81ccda?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "09-water",
+      "path": "09-water.jpg",
+      "size": [
+        1800,
+        1200
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1519046904884-53103b34b206?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "10-rocks",
+      "path": "10-rocks.jpg",
+      "size": [
+        1800,
+        1196
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "11-forest",
+      "path": "11-forest.jpg",
+      "size": [
+        1800,
+        1200
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=max&w=1800&q=85"
+    },
+    {
+      "name": "12-road",
+      "path": "12-road.jpg",
+      "size": [
+        1800,
+        1242
+      ],
+      "source": "Unsplash",
+      "asset_url": "https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=max&w=1800&q=85"
+    }
+  ]
+}
