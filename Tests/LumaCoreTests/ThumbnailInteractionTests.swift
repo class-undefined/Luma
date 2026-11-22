@@ -34,4 +34,12 @@ final class ThumbnailInteractionTests: XCTestCase {
         XCTAssertEqual(scroll.handle(delta: -20, precise: true, control: true, momentum: false, timestamp: 1.01).step, 0)
         XCTAssertEqual(scroll.handle(delta: -8, precise: true, control: true, momentum: false, timestamp: 1.02).step, -1)
     }
+
+    func testReleasingControlBeforeGestureEndStillSuppressesMomentum() {
+        var scroll = ScrollStepAccumulator()
+        _ = scroll.handle(delta: 30, precise: true, control: true, momentum: false, began: true, timestamp: 1)
+        _ = scroll.handle(delta: 0, precise: true, control: false, momentum: false, timestamp: 1.1)
+        XCTAssertTrue(scroll.handle(delta: 20, precise: true, control: false, momentum: true, timestamp: 1.15).consumed)
+        XCTAssertFalse(scroll.handle(delta: 20, precise: true, control: false, momentum: false, began: true, timestamp: 1.2).consumed)
+    }
 }

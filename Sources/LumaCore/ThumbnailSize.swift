@@ -49,7 +49,6 @@ public struct ScrollStepAccumulator: Sendable {
         guard control else {
             accumulated = 0
             direction = 0
-            suppressMomentum = false
             return Result(consumed: false, step: 0)
         }
         suppressMomentum = true
