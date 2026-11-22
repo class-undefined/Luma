@@ -68,13 +68,26 @@ final class GalleryCollectionView: NSCollectionView {
     }
 }
 
+final class GalleryTableView: NSTableView {
+    var onOpen: (() -> Void)?
+    var contextMenu: (() -> NSMenu)?
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 49 { onOpen?() } else { super.keyDown(with: event) }
+    }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let clicked = row(at: convert(event.locationInWindow, from: nil))
+        if clicked >= 0 { selectRowIndexes(IndexSet(integer: clicked), byExtendingSelection: false) }
+        return contextMenu?()
+    }
+}
+
 final class GalleryViewController: NSViewController, NSCollectionViewDataSource, NSCollectionViewDelegate,
                                    NSTableViewDataSource, NSTableViewDelegate {
     let state: AppState
     let collection = GalleryCollectionView()
     let layout = GalleryLayout()
     let gridScroll = GalleryScrollView()
-    let table = NSTableView()
+    let table = GalleryTableView()
     let listScroll = NSScrollView()
     let empty = EmptyView(frame: .zero)
     var onOpen: (() -> Void)?
@@ -131,7 +144,8 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
         table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         table.target = self
         table.doubleAction = #selector(openSelected)
-        table.menu = NSMenu()
+        table.onOpen = { [weak self] in self?.onOpen?() }
+        table.contextMenu = { [weak self] in self?.contextMenu?() ?? NSMenu() }
         table.setAccessibilityLabel("图像列表")
         listScroll.documentView = table
         listScroll.hasVerticalScroller = true
