@@ -14,13 +14,15 @@ final class ImageLibraryTests: XCTestCase {
 
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: directory) }
 
-    private func image(_ name: String, orientation: Int = 1) throws -> URL {
+    private func image(_ name: String, orientation: Int = 1, properties: [String: Any] = [:]) throws -> URL {
         let url = directory.appendingPathComponent(name)
         let context = CGContext(data: nil, width: 40, height: 20, bitsPerComponent: 8, bytesPerRow: 160,
                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         let image = context.makeImage()!
         let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.tiff.identifier as CFString, 1, nil)!
-        CGImageDestinationAddImage(destination, image, [kCGImagePropertyOrientation: orientation] as CFDictionary)
+        var properties = properties
+        properties[kCGImagePropertyOrientation as String] = orientation
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
         return url
     }
@@ -48,5 +50,32 @@ final class ImageLibraryTests: XCTestCase {
 
     func testMissingDirectoryReportsAnError() {
         XCTAssertThrowsError(try ImageLibrary.scan(urls: [directory.appendingPathComponent("missing")]))
+    }
+
+    func testCameraMetadataAndCaptureTimeAreReadFromEXIF() throws {
+        let properties: [String: Any] = [
+            kCGImagePropertyTIFFDictionary as String: [
+                kCGImagePropertyTIFFMake as String: "FUJIFILM",
+                kCGImagePropertyTIFFModel as String: "FUJIFILM X-T5"
+            ],
+            kCGImagePropertyExifDictionary as String: [
+                kCGImagePropertyExifLensModel as String: "XF 23mm F2 R WR",
+                kCGImagePropertyExifDateTimeOriginal as String: "2025:01:02 03:04:05",
+                kCGImagePropertyExifOffsetTimeOriginal as String: "+08:00",
+                kCGImagePropertyExifExposureTime as String: 1.0 / 125,
+                kCGImagePropertyExifFNumber as String: 2.0,
+                kCGImagePropertyExifISOSpeedRatings as String: [640],
+                kCGImagePropertyExifFocalLength as String: 23.0,
+                kCGImagePropertyExifExposureBiasValue as String: -0.3
+            ]
+        ]
+        let url = try image("exif.tiff", properties: properties)
+        let metadata = try XCTUnwrap(ImageMetadata.read(from: url))
+        XCTAssertEqual(metadata.camera, "FUJIFILM X-T5")
+        XCTAssertEqual(metadata.lens, "XF 23mm F2 R WR")
+        XCTAssertEqual(metadata.exposureDescription, "1/125 s")
+        XCTAssertEqual(metadata.iso, 640)
+        XCTAssertEqual(metadata.bitDepth, 8)
+        XCTAssertEqual(metadata.capturedAt, ISO8601DateFormatter().date(from: "2025-01-02T03:04:05+08:00"))
     }
 }

@@ -154,7 +154,7 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
     func updateLayout() {
         guard isViewLoaded else { return }
         let bounds = host.bounds
-        let inspectorWidth: CGFloat = !isFullscreen && state.inspectorVisible ? 272 : 0
+        let inspectorWidth: CGFloat = !isFullscreen && state.inspectorVisible ? 320 : 0
         let stripHeight: CGFloat = isFullscreen ? 0 : 94
         let width = bounds.width - inspectorWidth
         background.frame = bounds
