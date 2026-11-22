@@ -4,3 +4,9 @@ build/
 .DS_Store
 *.xcuserstate
 xcuserdata/
+
+# Local code-signing material
+*.p12
+*.pfx
+*.keychain
+*.keychain-db

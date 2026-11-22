@@ -1,5 +1,7 @@
 # Luma
 
+[![Build and Release](https://github.com/class-undefined/Luma/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/class-undefined/Luma/actions/workflows/build-and-release.yml)
+
 Luma 是按 `design/Luma-macOS.figcraft` 实现的 macOS 原生图片查看器。界面使用 AppKit，图片解码使用 ImageIO，图标使用 SF Symbols。RAW 原图使用 Core Image 解码。项目没有第三方依赖。
 
 ## 运行
@@ -27,7 +29,87 @@ open build/Luma.app
 ./scripts/build.sh release --universal
 ```
 
-构建脚本会打包图标、示例图片和文件类型声明，并使用本机临时签名。对外发行时，需要改用 Developer ID 签名并完成公证。
+构建脚本会打包图标、示例图片和文件类型声明，默认使用临时签名（ad hoc）。构建产物保存在 `build/`，源码中的版本声明保持不变。
+
+## 编译和打包 DMG
+
+一条命令生成包含 Apple Silicon 和 Intel 架构的 Release 安装盘：
+
+```bash
+./scripts/package-dmg.sh
+```
+
+产物为 `build/Luma-<版本>-universal.dmg` 和对应的 `.dmg.sha256`。安装盘包含 `Luma.app`、指向 `/Applications` 的拖拽入口和安装说明。打包结束前，会挂载只读映像，校验应用签名、资源、版本和架构，再生成 SHA-256 校验文件。
+
+指定版本或仅编译本机架构：
+
+```bash
+./scripts/package-dmg.sh --version 0.3.0
+./scripts/package-dmg.sh --version 0.3.0-rc.1 --native
+```
+
+可用 `--output-dir <目录>` 更改输出位置，用 `--skip-build` 复用该目录中已构建的 `Luma.app`。复用时，应用版本和架构必须与参数匹配。预发布版本会写入 DMG 文件名，应用的版本字段使用不带后缀的数字版本。
+
+单独验证安装盘和校验文件：
+
+```bash
+./scripts/verify-dmg.sh build/Luma-0.2.1-universal.dmg 0.2.1 universal
+cd build
+shasum -a 256 -c Luma-0.2.1-universal.dmg.sha256
+```
+
+`LUMA_VERSION` 可覆盖构建版本，`LUMA_BUILD_NUMBER` 可覆盖构建编号，`LUMA_OUTPUT_DIR` 可指定构建输出目录。这些值只写入打包副本，不会修改 `Packaging/Info.plist`。
+
+## GitHub 自动发布
+
+公开仓库位于 [class-undefined/Luma](https://github.com/class-undefined/Luma)。工作流定义在 `.github/workflows/build-and-release.yml`。
+
+- 推送 `main` 或提交 Pull Request：运行核心测试，构建并校验通用 DMG，上传 Actions 构建产物。
+- 推送 `v*` 版本标签：测试和打包成功后，自动创建 GitHub Release，上传 DMG 和 SHA-256 文件。
+- 发布已有 GitHub Release：构建对应标签的安装盘，补齐或更新 Release 附件。
+- 手动运行工作流：可以指定版本，只构建并上传 Actions 产物。
+
+发布当前版本：
+
+```bash
+git tag v0.2.1
+git push origin v0.2.1
+```
+
+也可以使用 `v0.3.0-rc.1` 等预发布标签，工作流会将新建的 Release 标记为预发布。标签决定安装包版本，GitHub 运行编号用作应用构建编号。发布任务只在测试、打包和校验全部成功后执行。
+
+手动检查打包流程：
+
+```bash
+gh workflow run build-and-release.yml --ref main
+gh run list --workflow build-and-release.yml
+```
+
+安装包可从 [Actions](https://github.com/class-undefined/Luma/actions/workflows/build-and-release.yml) 下载。发布后的版本位于 [Releases](https://github.com/class-undefined/Luma/releases)。
+
+### Developer ID 签名和 Apple 公证
+
+默认 DMG 使用临时签名，未经过 Apple 公证。下载后首次打开时，macOS 可能阻止运行，需要在系统的“隐私与安全性”中允许。正式发行可配置 Developer ID 签名和公证。
+
+在仓库的 Actions Secrets 中配置以下值，工作流会使用临时钥匙串导入证书：
+
+| Secret | 内容 |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12` | Developer ID Application 证书及私钥导出的 `.p12` 文件的 Base64 内容。 |
+| `MACOS_CERTIFICATE_PASSWORD` | `.p12` 导出密码。 |
+| `MACOS_SIGNING_IDENTITY` | 完整的 Developer ID Application 签名身份。 |
+
+另外配置以下三个 Secret 即可启用公证：
+
+| Secret | 内容 |
+| --- | --- |
+| `APPLE_ID` | Apple Developer 账户。 |
+| `APPLE_APP_PASSWORD` | 该账户的应用专用密码。 |
+| `APPLE_TEAM_ID` | Apple Developer Team ID。 |
+
+工作流会签名应用、提交应用公证并附加票据，再生成 DMG，完成 DMG 的签名、公证和票据附加。临时证书文件和钥匙串会在任务结束时清理。不完整的签名配置会使任务失败。
+
+本地签名可设置 `CODESIGN_IDENTITY`。本地公证使用已由 `notarytool` 保存的 `NOTARYTOOL_PROFILE`，需要时可通过 `NOTARYTOOL_KEYCHAIN` 指定钥匙串。公证要求 Developer ID 签名，不能使用临时签名。
 
 ## 偏好设置与默认查看器
 
@@ -123,5 +205,6 @@ swift test
 | `Sources/Luma/` | AppKit 应用、图库、看图画布、检查器、全屏交互和原生设置窗口。 |
 | `Tests/LumaCoreTests/` | 核心行为与真实图片文件测试。 |
 | `Packaging/` | 应用声明和图标。 |
-| `scripts/` | 构建、运行、图标生成和窗口验收入口。 |
+| `scripts/` | 构建、DMG 打包校验、签名、运行和窗口验收入口。 |
+| `.github/workflows/` | 云端测试、通用 DMG 构建和自动 Release。 |
 | `design/` | 原始设计源文件、预览和素材。 |
