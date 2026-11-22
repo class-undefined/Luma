@@ -11,7 +11,7 @@ let package = Package(
     targets: [
         .target(name: "LumaCore"),
         .executableTarget(name: "Luma", dependencies: ["LumaCore"], resources: [.copy("Resources/Demo")]),
-        .testTarget(name: "LumaCoreTests", dependencies: ["LumaCore"])
+        .testTarget(name: "LumaCoreTests", dependencies: ["LumaCore"], resources: [.copy("Fixtures")])
     ],
     swiftLanguageModes: [.v5]
 )

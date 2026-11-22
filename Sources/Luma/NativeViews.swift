@@ -89,7 +89,7 @@ final class EmptyView: FlippedView {
     let icon = NSImageView()
     let open = NSButton(title: "打开…", target: nil, action: nil)
     let demo = NSButton(title: "打开示例图库", target: nil, action: nil)
-    let formats = label("JPEG、PNG、HEIC、WebP、GIF、TIFF", size: 11, color: .tertiaryLabelColor)
+    let formats = label("JPEG、PNG、HEIC、WebP、GIF、TIFF、RAW", size: 11, color: .tertiaryLabelColor)
     let shortcut = label("⌘O", size: 11, color: .tertiaryLabelColor)
     var onOpen: (() -> Void)?
     var onDemo: (() -> Void)?

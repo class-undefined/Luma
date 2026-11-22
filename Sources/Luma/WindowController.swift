@@ -269,7 +269,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, .rawImage] + ImageDecoder.rawExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         panel.beginSheetModal(for: window!) { [weak self] response in
             if response == .OK { self?.state.open(panel.urls) }
         }

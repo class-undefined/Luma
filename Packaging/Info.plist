@@ -23,7 +23,7 @@
             <key>CFBundleTypeRole</key><string>Viewer</string>
             <key>LSHandlerRank</key><string>Alternate</string>
             <key>LSItemContentTypes</key>
-            <array><string>public.image</string></array>
+            <array><string>public.image</string><string>public.camera-raw-image</string></array>
         </dict>
     </array>
 </dict>

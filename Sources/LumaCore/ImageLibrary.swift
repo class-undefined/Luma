@@ -8,6 +8,7 @@ public enum ImageLibrary {
     }
 
     public static func supports(_ url: URL) -> Bool {
+        if ImageDecoder.isRAW(url) { return true }
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return type.conforms(to: .image)
     }
