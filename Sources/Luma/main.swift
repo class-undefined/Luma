@@ -6,13 +6,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let state = AppState()
+        let validating = CommandLine.arguments.contains("--ui-test")
+        let validationDomain = "org.luma.validation.\(UUID().uuidString)"
+        let state = AppState(defaults: validating ? UserDefaults(suiteName: validationDomain)! : .standard)
         let controller = WindowController(state: state)
         self.controller = controller
         buildMenu(controller)
         controller.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         let arguments = CommandLine.arguments.dropFirst()
+        #if DEBUG
+        if validating {
+            UIValidation.run(controller, domain: validationDomain)
+            return
+        }
+        #endif
         if !pendingURLs.isEmpty { state.open(pendingURLs) }
         else if arguments.contains("--demo") { state.showDemo() }
         else if !arguments.contains("--empty") {
@@ -75,9 +83,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let view = submenu("显示")
         add(view, "切换侧边栏", #selector(WindowController.toggleSidebar(_:)), "s", modifiers: [.command, .control])
+        add(view, "显示或隐藏信息", #selector(WindowController.toggleInspector(_:)), "i")
+        add(view, "全屏", #selector(WindowController.toggleFullscreen(_:)), "f", modifiers: [.command, .control])
+        view.addItem(.separator())
+        add(view, "放大缩略图", #selector(WindowController.increaseThumbnails(_:)), "+", modifiers: [.command, .option])
+        add(view, "缩小缩略图", #selector(WindowController.decreaseThumbnails(_:)), "-", modifiers: [.command, .option])
+        add(view, "搜索", #selector(WindowController.focusSearch(_:)), "f")
+        add(view, "返回", #selector(WindowController.back(_:)), "[")
+        add(view, "前进", #selector(WindowController.forward(_:)), "]")
         let image = submenu("图像")
         add(image, "打开选中图像", #selector(WindowController.openSelected(_:)), "\r", modifiers: [])
         add(image, "添加或取消收藏", #selector(WindowController.favorite(_:)), "d")
+        image.addItem(.separator())
+        add(image, "放大", #selector(WindowController.zoomIn(_:)), "+")
+        add(image, "缩小", #selector(WindowController.zoomOut(_:)), "-")
+        add(image, "适合窗口", #selector(WindowController.fitImage(_:)), "0")
+        add(image, "实际大小", #selector(WindowController.actualSize(_:)), "1")
+        add(image, "向左旋转", #selector(WindowController.rotateImage(_:)), "l")
+        add(image, "播放或暂停幻灯片", #selector(WindowController.slideshow(_:)), "p")
         let windows = submenu("窗口")
         windows.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windows.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")

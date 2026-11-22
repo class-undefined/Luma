@@ -31,6 +31,18 @@ final class AppState {
     private(set) var inspectorVisible: Bool
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = UUID()
+    private struct Location {
+        let source: Source
+        let title: String
+        let photos: [Photo]
+        let selectedID: String?
+        let query: String
+        let skipped: Int
+    }
+    private var backHistory: [Location] = []
+    private var forwardHistory: [Location] = []
+    var canGoBack: Bool { !backHistory.isEmpty }
+    var canGoForward: Bool { !forwardHistory.isEmpty }
 
     var selectedPhoto: Photo? { visiblePhotos.first { $0.id == selectedID } }
     var selectedIndex: Int? { visiblePhotos.firstIndex { $0.id == selectedID } }
@@ -130,6 +142,33 @@ final class AppState {
         onChange?(.content)
     }
 
+    private var location: Location {
+        Location(source: source, title: title, photos: allPhotos, selectedID: selectedID, query: query, skipped: skipped)
+    }
+    private func restore(_ location: Location) {
+        loadTask?.cancel()
+        loadGeneration = UUID()
+        isLoading = false
+        source = location.source
+        title = location.title
+        allPhotos = location.photos
+        selectedID = location.selectedID
+        query = location.query
+        skipped = location.skipped
+        mode = .browser
+        filter()
+    }
+    func goBack() {
+        guard let previous = backHistory.popLast() else { return }
+        forwardHistory.append(location)
+        restore(previous)
+    }
+    func goForward() {
+        guard let next = forwardHistory.popLast() else { return }
+        backHistory.append(location)
+        restore(next)
+    }
+
     func toggleFavorite() {
         guard let photo = selectedPhoto else { return }
         if favoritePaths.contains(photo.id) { favoritePaths.remove(photo.id) } else { favoritePaths.insert(photo.id) }
@@ -202,6 +241,11 @@ final class AppState {
                 self.onChange?(.loading)
                 self.onError?("无法打开图像：\(error.localizedDescription)")
             case .success(let scan):
+                if self.mode != .empty && self.source != source {
+                    self.backHistory.append(self.location)
+                    self.backHistory = Array(self.backHistory.suffix(30))
+                    self.forwardHistory.removeAll()
+                }
                 self.source = source
                 self.title = title
                 self.query = ""

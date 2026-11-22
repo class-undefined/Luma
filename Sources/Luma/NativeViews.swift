@@ -99,6 +99,7 @@ final class EmptyView: FlippedView {
         icon.contentTintColor = .tertiaryLabelColor
         icon.imageScaling = .scaleProportionallyUpOrDown
         open.bezelStyle = .rounded
+        open.controlSize = .large
         open.bezelColor = .controlAccentColor
         open.keyEquivalent = ""
         open.target = self

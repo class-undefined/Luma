@@ -6,12 +6,13 @@ final class WorkspaceView: FlippedView {
     override func layout() { super.layout(); onLayout?() }
 }
 
-final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate {
+final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate, NSUserInterfaceValidations {
     let state: AppState
     let root = DropView(frame: .zero)
     let workspace = WorkspaceView(frame: .zero)
     let sidebar: SidebarViewController
     let gallery: GalleryViewController
+    let viewer: ViewerViewController
     let empty = EmptyView(frame: .zero)
     let status: StatusBar
     let search = NSSearchField()
@@ -21,11 +22,16 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     private let titleView = NSView()
     private var toolbarItems: [String: NSToolbarItem] = [:]
     private let separator = NSBox()
+    private let zoomLabel = label("100%", size: 11)
+    private var lastMode: AppState.Mode?
+    private var keyMonitor: Any?
+    private(set) var isFullscreen = false
 
     init(state: AppState) {
         self.state = state
         sidebar = SidebarViewController(state: state)
         gallery = GalleryViewController(state: state)
+        viewer = ViewerViewController(state: state)
         status = StatusBar(state: state)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: min(1440, screen.width - 80), height: min(850, screen.height - 80)),
@@ -45,6 +51,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         workspace.frame = root.bounds
         workspace.addSubview(sidebar.view)
         workspace.addSubview(gallery.view)
+        workspace.addSubview(viewer.view)
         workspace.addSubview(empty)
         workspace.addSubview(status)
         separator.boxType = .separator
@@ -56,11 +63,18 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         gallery.onOpenFiles = { [weak self] in self?.openFiles(nil) }
         gallery.onOpen = { [weak self] in self?.openSelected(nil) }
         gallery.contextMenu = { [weak self] in self?.photoMenu() ?? NSMenu() }
+        viewer.onZoom = { [weak self] scale in self?.zoomLabel.stringValue = "\(Int((scale * 100).rounded()))%" }
+        viewer.onReveal = { [weak self] in self?.showInFinder(nil) }
+        viewer.onShare = { [weak self] in self?.share(nil) }
+        viewer.onToggleFullscreen = { [weak self] in self?.toggleFullscreen(nil) }
         workspace.onLayout = { [weak self] in self?.layoutWorkspace() }
         state.onChange = { [weak self] change in self?.update(change) }
         state.onError = { [weak self] message in self?.showError(message) }
         configureToolbar()
         update(.content)
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKey(event) ?? event
+        }
         window.center()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -68,30 +82,47 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     func layoutWorkspace() {
         let bounds = workspace.bounds
         let emptyMode = state.mode == .empty
-        let sidebarWidth: CGFloat = state.sidebarVisible && !emptyMode ? 216 : 0
-        let height = bounds.height - (emptyMode ? 0 : 26)
+        let viewing = state.mode == .viewer
+        let immersive = viewing && isFullscreen
+        let sidebarWidth: CGFloat = state.sidebarVisible && !emptyMode && !viewing ? 216 : 0
+        let height = bounds.height - (emptyMode || immersive ? 0 : 26)
         sidebar.view.frame = NSRect(x: 0, y: 0, width: sidebarWidth, height: height)
         separator.frame = NSRect(x: sidebarWidth - 1, y: 0, width: 1, height: height)
         gallery.view.frame = NSRect(x: sidebarWidth, y: 0, width: bounds.width - sidebarWidth, height: height)
+        viewer.view.frame = NSRect(x: 0, y: 0, width: bounds.width, height: height)
         empty.frame = bounds
         status.frame = NSRect(x: 0, y: height, width: bounds.width, height: 26)
         sidebar.view.isHidden = sidebarWidth == 0
         separator.isHidden = sidebarWidth == 0
-        gallery.view.isHidden = emptyMode
-        status.isHidden = emptyMode
+        gallery.view.isHidden = emptyMode || viewing
+        viewer.view.isHidden = !viewing
+        status.isHidden = emptyMode || immersive
         empty.isHidden = !emptyMode
     }
 
     func update(_ change: AppState.Change) {
-        window?.title = state.mode == .empty ? "Luma" : "\(state.title) — Luma"
-        titleLabel.stringValue = state.mode == .empty ? "Luma" : state.title
-        subtitleLabel.stringValue = state.isLoading ? "正在读取图像…" : state.mode == .empty ? "" : "\(state.visiblePhotos.count) 张图像"
+        let viewing = state.mode == .viewer
+        let modeChanged = lastMode != state.mode
+        if modeChanged {
+            lastMode = state.mode
+            window?.appearance = viewing ? NSAppearance(named: .darkAqua) : nil
+            configureToolbar()
+            if !viewing { viewer.stopSlideshow() }
+        }
+        window?.title = state.mode == .empty ? "Luma" : "\(state.selectedPhoto?.name ?? state.title) — Luma"
+        titleLabel.stringValue = viewing ? state.selectedPhoto?.name ?? "Luma" : state.mode == .empty ? "Luma" : state.title
+        subtitleLabel.stringValue = state.isLoading ? "正在读取图像…" : state.mode == .empty ? "" : viewing ? state.title : "\(state.visiblePhotos.count) 张图像"
         switch change {
         case .content:
             gallery.reload()
+            if viewing { viewer.reload() }
             if search.stringValue != state.query { search.stringValue = state.query }
-        case .selection: gallery.updateSelection()
-        case .preferences: gallery.updatePreferences()
+        case .selection:
+            gallery.updateSelection()
+            if viewing { viewer.updateSelection() }
+        case .preferences:
+            gallery.updatePreferences()
+            viewer.updateLayout()
         case .loading: break
         }
         sidebar.reload()
@@ -99,9 +130,11 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         status.update()
         layoutWorkspace()
         validateToolbar()
+        if modeChanged && !viewing { gallery.updateSelection(reveal: true) }
     }
 
     private func configureToolbar() {
+        toolbarItems.removeAll()
         search.placeholderString = "搜索"
         search.sendsSearchStringImmediately = true
         search.sendsWholeSearchString = false
@@ -116,8 +149,10 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         viewMode.setWidth(34, forSegment: 0)
         viewMode.setWidth(34, forSegment: 1)
         titleView.frame = NSRect(x: 0, y: 0, width: 200, height: 36)
-        titleLabel.frame = NSRect(x: 0, y: 17, width: 200, height: 18)
+        titleLabel.alignment = state.mode == .empty ? .center : .left
+        titleLabel.frame = NSRect(x: 0, y: state.mode == .empty ? 9 : 17, width: 200, height: 18)
         subtitleLabel.frame = NSRect(x: 0, y: 1, width: 200, height: 16)
+        subtitleLabel.isHidden = state.mode == .empty
         titleView.addSubview(titleLabel); titleView.addSubview(subtitleLabel)
         let toolbar = NSToolbar(identifier: "LumaBrowserToolbar")
         toolbar.delegate = self
@@ -128,8 +163,13 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        ["sidebar", "back", "title", NSToolbarItem.Identifier.flexibleSpace.rawValue,
-         "viewMode", "sort", "share", "search"].map { NSToolbarItem.Identifier($0) }
+        if state.mode == .empty { return [.flexibleSpace, .init("title"), .flexibleSpace] }
+        let items = state.mode == .viewer
+            ? ["back", "grid", "title", NSToolbarItem.Identifier.flexibleSpace.rawValue,
+               "zoom", "fit", "rotate", "favorite", "share", "inspector", "fullscreen", "more"]
+            : ["sidebar", "back", "forward", "title", NSToolbarItem.Identifier.flexibleSpace.rawValue,
+               "viewMode", "sort", "share", "search"]
+        return items.map { NSToolbarItem.Identifier($0) }
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -137,18 +177,42 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         switch itemIdentifier.rawValue {
         case "sidebar": configure(item, symbol: "sidebar.left", label: "切换侧边栏", action: #selector(toggleSidebar))
         case "back": configure(item, symbol: "chevron.left", label: "返回", action: #selector(back))
+        case "forward": configure(item, symbol: "chevron.right", label: "前进", action: #selector(forward))
         case "title": item.view = titleView; item.label = "当前文件夹"
         case "viewMode": item.view = viewMode; item.label = "显示方式"
         case "sort": configure(item, symbol: "arrow.up.arrow.down", label: "排序", action: #selector(showSort))
         case "share": configure(item, symbol: "square.and.arrow.up", label: "共享", action: #selector(share))
         case "search": item.view = search; item.label = "搜索"
+        case "grid": configure(item, symbol: "square.grid.2x2", label: "返回图库", action: #selector(back))
+        case "fit": configure(item, symbol: "rectangle.expand.vertical", label: "适合窗口", action: #selector(fitImage))
+        case "rotate": configure(item, symbol: "arrow.counterclockwise", label: "向左旋转", action: #selector(rotateImage))
+        case "favorite": configure(item, symbol: "heart", label: "收藏", action: #selector(favorite))
+        case "inspector": configure(item, symbol: "info.circle", label: "显示检查器", action: #selector(toggleInspector))
+        case "fullscreen": configure(item, symbol: "arrow.up.left.and.arrow.down.right", label: "进入全屏", action: #selector(toggleFullscreen))
+        case "more": configure(item, symbol: "ellipsis.circle", label: "更多", action: #selector(showMore))
+        case "zoom":
+            let minus = ActionButton(symbol: "minus", title: "缩小") { [weak self] in self?.zoomOut(nil) }
+            let plus = ActionButton(symbol: "plus", title: "放大") { [weak self] in self?.zoomIn(nil) }
+            zoomLabel.alignment = .center
+            let group = NSStackView(views: [minus, zoomLabel, plus])
+            group.spacing = 8
+            minus.widthAnchor.constraint(equalToConstant: 28).isActive = true
+            plus.widthAnchor.constraint(equalToConstant: 28).isActive = true
+            zoomLabel.widthAnchor.constraint(equalToConstant: 48).isActive = true
+            item.view = group; item.label = "缩放"
         default: return nil
         }
         toolbarItems[itemIdentifier.rawValue] = item
         return item
     }
     private func configure(_ item: NSToolbarItem, symbol: String, label: String, action: Selector) {
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        let button = ActionButton(symbol: symbol, title: label)
+        button.actionHandler = { [weak self] in _ = self?.perform(action, with: nil) }
+        button.frame = NSRect(x: 0, y: 0, width: 32, height: 32)
+        button.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        item.view = button
+        item.autovalidates = false
         item.label = label
         item.toolTip = label
         item.target = self
@@ -156,9 +220,15 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     private func validateToolbar() {
         toolbarItems["share"]?.isEnabled = state.selectedPhoto != nil
-        toolbarItems["back"]?.isEnabled = state.mode != .empty
+        toolbarItems["back"]?.isEnabled = state.mode == .viewer || state.canGoBack
+        toolbarItems["forward"]?.isEnabled = state.canGoForward
         toolbarItems["sort"]?.isEnabled = state.hasPhotos
         toolbarItems["sidebar"]?.isEnabled = state.mode != .empty
+        (toolbarItems["favorite"]?.view as? NSButton)?.image = NSImage(systemSymbolName: state.isFavorite ? "heart.fill" : "heart", accessibilityDescription: "收藏")?.withSymbolConfiguration(.init(pointSize: 16, weight: .regular))
+        toolbarItems["favorite"]?.toolTip = state.isFavorite ? "取消收藏（⌘D）" : "收藏（⌘D）"
+        for item in toolbarItems.values {
+            if let button = item.view as? ActionButton { button.isEnabled = item.isEnabled }
+        }
     }
 
     @objc func openFiles(_ sender: Any?) {
@@ -174,11 +244,43 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     @objc func openDemo(_ sender: Any?) { state.showDemo() }
     @objc func openSelected(_ sender: Any?) {
-        if let photo = state.selectedPhoto { NSWorkspace.shared.open(photo.url) }
+        state.showViewer()
+        window?.makeFirstResponder(viewer.canvas)
     }
     @objc func toggleSidebar(_ sender: Any?) { state.toggleSidebar() }
-    @objc func back(_ sender: Any?) { state.showBrowser() }
+    @objc func back(_ sender: Any?) {
+        if isFullscreen { window?.toggleFullScreen(nil) }
+        else if state.mode == .viewer { state.showBrowser() }
+        else { state.goBack() }
+    }
+    @objc func forward(_ sender: Any?) { state.goForward() }
     @objc func favorite(_ sender: Any?) { state.toggleFavorite() }
+    @objc func toggleInspector(_ sender: Any?) { state.toggleInspector() }
+    @objc func zoomIn(_ sender: Any?) { viewer.canvas.zoom(by: 1.25) }
+    @objc func zoomOut(_ sender: Any?) { viewer.canvas.zoom(by: 1 / 1.25) }
+    @objc func fitImage(_ sender: Any?) { viewer.canvas.fit() }
+    @objc func actualSize(_ sender: Any?) { viewer.canvas.actualSize() }
+    @objc func rotateImage(_ sender: Any?) { viewer.canvas.rotate() }
+    @objc func slideshow(_ sender: Any?) {
+        if state.mode != .viewer { state.showViewer() }
+        viewer.toggleSlideshow()
+    }
+    @objc func toggleFullscreen(_ sender: Any?) {
+        if state.mode != .viewer { state.showViewer() }
+        guard state.hasPhotos else { return }
+        window?.toggleFullScreen(nil)
+    }
+    @objc func increaseThumbnails(_ sender: Any?) { state.stepSize(1) }
+    @objc func decreaseThumbnails(_ sender: Any?) { state.stepSize(-1) }
+    @objc func focusSearch(_ sender: Any?) {
+        if state.mode == .viewer { state.showBrowser() }
+        window?.makeFirstResponder(search)
+    }
+    @objc private func showMore(_ sender: Any?) {
+        if let view = window?.contentView {
+            photoMenu().popUp(positioning: nil, at: window?.mouseLocationOutsideOfEventStream ?? .zero, in: view)
+        }
+    }
     @objc func showInFinder(_ sender: Any?) {
         if let photo = state.selectedPhoto { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
     }
@@ -222,4 +324,51 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         alert.alertStyle = .warning
         if let window { alert.beginSheetModal(for: window) }
     }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(openSelected), #selector(favorite), #selector(share), #selector(showInFinder), #selector(toggleFullscreen), #selector(slideshow): return state.selectedPhoto != nil
+        case #selector(zoomIn), #selector(zoomOut), #selector(fitImage), #selector(actualSize), #selector(rotateImage), #selector(toggleInspector): return state.mode == .viewer
+        case #selector(back): return state.mode == .viewer || state.canGoBack
+        case #selector(forward): return state.canGoForward
+        case #selector(increaseThumbnails): return state.mode == .browser && state.thumbnailSize != .huge
+        case #selector(decreaseThumbnails): return state.mode == .browser && state.thumbnailSize != .tiny
+        default: return true
+        }
+    }
+    private func handleKey(_ event: NSEvent) -> NSEvent? {
+        guard event.window === window, !(window?.firstResponder is NSTextView),
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
+        if event.keyCode == 53 {
+            if !state.query.isEmpty && state.mode == .browser { state.setQuery("") }
+            else if state.mode == .viewer { back(nil) }
+            else { return event }
+            return nil
+        }
+        guard state.mode == .viewer else { return event }
+        switch event.keyCode {
+        case 123: state.navigate(-1)
+        case 124: state.navigate(1)
+        case 49: viewer.toggleSlideshow()
+        case 36: back(nil)
+        default: return event
+        }
+        return nil
+    }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        isFullscreen = true
+        if state.mode == .viewer {
+            window?.toolbar?.isVisible = false
+            viewer.isFullscreen = true
+        }
+        layoutWorkspace()
+    }
+    func windowWillExitFullScreen(_ notification: Notification) {
+        isFullscreen = false
+        viewer.isFullscreen = false
+        window?.toolbar?.isVisible = true
+        layoutWorkspace()
+    }
+    func windowWillClose(_ notification: Notification) { viewer.stopSlideshow() }
+    deinit { if let keyMonitor { NSEvent.removeMonitor(keyMonitor) } }
 }

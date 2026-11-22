@@ -45,7 +45,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         scroll.autohidesScrollers = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
         open.bezelStyle = .rounded
-        open.controlSize = .small
+        open.controlSize = .large
         open.font = .systemFont(ofSize: 12)
         open.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
         open.imagePosition = .imageLeading

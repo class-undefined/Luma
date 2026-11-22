@@ -1,0 +1,137 @@
+#if DEBUG
+import AppKit
+import LumaCore
+
+/// Runs against real AppKit views, with an isolated preferences domain.
+/// Launch the debug executable with --ui-test to write evidence under build/validation.
+@MainActor
+enum UIValidation {
+    struct Failure: Error { let message: String }
+    static func run(_ controller: WindowController, domain: String) {
+        Task {
+            let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("build/validation")
+            var passed: [String] = []
+            @MainActor func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
+                guard condition() else { throw Failure(message: message) }
+                passed.append(message)
+            }
+            @MainActor func settle(_ milliseconds: UInt64 = 160) async { try? await Task.sleep(nanoseconds: milliseconds * 1_000_000) }
+            @MainActor func loaded() async throws {
+                for _ in 0..<100 {
+                    if !controller.state.isLoading { return }
+                    await settle(50)
+                }
+                throw Failure(message: "Image loading timed out")
+            }
+            @MainActor func snapshot(_ name: String) async throws {
+                controller.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                await settle(250)
+                guard let window = controller.window else { return }
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                process.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", output.appendingPathComponent("\(name).png").path]
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus != 0 { throw Failure(message: "Window capture failed") }
+            }
+            do {
+                try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                try await snapshot("00-empty")
+                controller.state.showDemo()
+                try await loaded()
+                await settle(400)
+                try check(controller.state.visiblePhotos.count == 12, "Demo library loads 12 real images")
+                try check(controller.state.selectedPhoto?.name == "DSCF_2408.jpg", "Initial selection survives collection reload")
+                let selected = controller.state.selectedID
+                for size in ThumbnailSize.allCases {
+                    controller.state.setSize(size)
+                    await settle()
+                    try check(controller.state.selectedID == selected, "Selection survives \(size.width) pt layout")
+                    try check(controller.status.slider.integerValue == size.rawValue && controller.status.sizeMenu.indexOfSelectedItem == size.rawValue, "All size controls agree at \(size.width) pt")
+                    try await snapshot("01-grid-\(Int(size.width))")
+                }
+                controller.state.stepSize(1)
+                try check(controller.state.thumbnailSize == .huge, "Maximum thumbnail size clamps")
+                controller.state.setSize(.tiny)
+                controller.state.stepSize(-1)
+                try check(controller.state.thumbnailSize == .tiny, "Minimum thumbnail size clamps")
+                controller.state.setSize(.large)
+                await settle()
+                let scroll = controller.gallery.gridScroll
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: 180))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                controller.state.select(controller.state.visiblePhotos[5].id)
+                let anchor = controller.gallery.captureAnchor()
+                controller.state.setSize(.huge)
+                await settle()
+                let restored = controller.gallery.captureAnchor()
+                try check(anchor?.id == restored?.id && abs((anchor?.offset ?? 0) - (restored?.offset ?? 0)) < 2,
+                          "Resize preserves selected visual anchor and scroll offset")
+                controller.state.setSize(.medium)
+                controller.state.setListMode(true)
+                await settle()
+                try check(!controller.gallery.listScroll.isHidden, "Native list view opens")
+                try await snapshot("02-list")
+                controller.state.setListMode(false)
+                controller.state.setQuery("2408")
+                try check(controller.state.visiblePhotos.count == 1, "Filename search filters the library")
+                controller.state.setQuery("no-such-image")
+                try check(controller.state.visiblePhotos.isEmpty && !controller.gallery.empty.isHidden, "Search empty state is visible")
+                controller.state.setQuery("")
+                controller.state.select(selected)
+                controller.state.toggleFavorite()
+                try check(controller.state.isFavorite, "Favorite is stored for the selected file")
+                let persisted = AppState(defaults: controller.state.defaults)
+                try check(persisted.thumbnailSize == .medium && persisted.favoritePaths.contains(selected!), "Thumbnail preference and favorite survive state reconstruction")
+                controller.openSelected(nil)
+                await settle(700)
+                try check(controller.state.mode == .viewer && controller.viewer.canvas.image != nil, "Viewer decodes the selected original")
+                let fit = controller.viewer.canvas.scale
+                controller.zoomIn(nil)
+                try check(controller.viewer.canvas.scale > fit, "Viewer zoom changes rendered scale")
+                controller.actualSize(nil)
+                try check(controller.viewer.canvas.scale == 1, "Actual size uses 100 percent zoom")
+                controller.fitImage(nil)
+                controller.rotateImage(nil)
+                try check(controller.viewer.canvas.quarterTurns == 1, "Rotation changes the canvas without writing the source")
+                controller.rotateImage(nil); controller.rotateImage(nil); controller.rotateImage(nil)
+                try await snapshot("03-viewer")
+                controller.state.navigate(1)
+                await settle(300)
+                try check(controller.state.selectedID != selected, "Arrow navigation changes the selected image")
+                controller.state.select(selected)
+                controller.slideshow(nil)
+                try check(controller.viewer.isPlaying, "Slideshow starts")
+                controller.viewer.stopSlideshow()
+                controller.toggleFullscreen(nil)
+                await settle(1300)
+                try check(controller.isFullscreen && controller.viewer.isFullscreen, "Native fullscreen enables the glass controls")
+                try await snapshot("04-fullscreen")
+                controller.back(nil)
+                await settle(1200)
+                try check(!controller.isFullscreen && controller.state.mode == .viewer, "Exiting fullscreen restores the viewer window")
+                controller.back(nil)
+                await settle()
+                try check(controller.state.mode == .browser && controller.state.selectedID == selected, "Returning to browser preserves selection")
+                controller.state.showFavorites()
+                try await loaded()
+                try check(controller.state.visiblePhotos.count == 1, "Favorites view reads persisted file URLs")
+                controller.state.toggleFavorite()
+                try check(controller.state.visiblePhotos.isEmpty, "Removing the last favorite leaves a valid empty state")
+                try await snapshot("05-empty-favorites")
+                try ("PASS\n" + passed.joined(separator: "\n") + "\n").write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
+                controller.state.defaults.removePersistentDomain(forName: domain)
+                print("Luma UI validation passed: \(passed.count) checks. Evidence: \(output.path)")
+                NSApp.terminate(nil)
+            } catch {
+                let message = (error as? Failure)?.message ?? error.localizedDescription
+                try? ("FAIL: \(message)\n" + passed.joined(separator: "\n")).write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
+                controller.state.defaults.removePersistentDomain(forName: domain)
+                fputs("Luma UI validation failed: \(message)\n", stderr)
+                Darwin.exit(1)
+            }
+        }
+    }
+}
+#endif

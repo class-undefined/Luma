@@ -181,11 +181,16 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
         loadViewIfNeeded()
         if appliedSize != state.thumbnailSize {
             let anchor = captureAnchor()
+            let wasSyncing = syncingSelection
+            syncingSelection = true
             layout.size = state.thumbnailSize
             appliedSize = state.thumbnailSize
+            collection.reloadData()
             layout.invalidateLayout()
             collection.layoutSubtreeIfNeeded()
             if let anchor { restoreAnchor(anchor) }
+            updateSelection()
+            syncingSelection = wasSyncing
         }
         gridScroll.isHidden = state.listMode || photos.isEmpty
         listScroll.isHidden = !state.listMode || photos.isEmpty
