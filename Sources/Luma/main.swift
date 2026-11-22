@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let validating = CommandLine.arguments.contains("--ui-test")
         let validationDomain = "org.luma.validation.\(UUID().uuidString)"
         let state = AppState(defaults: validating ? UserDefaults(suiteName: validationDomain)! : .standard)
-        let controller = WindowController(state: state)
+        let controller = WindowController(state: state, clipboard: validating ? .withUniqueName() : .general)
         self.controller = controller
         buildMenu(controller)
         controller.showWindow(nil)

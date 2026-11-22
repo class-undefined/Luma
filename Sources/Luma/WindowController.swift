@@ -9,6 +9,7 @@ final class WorkspaceView: FlippedView {
 
 final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate, NSUserInterfaceValidations, NSMenuDelegate {
     let state: AppState
+    let clipboard: NSPasteboard
     let root = DropView(frame: .zero)
     let workspace = WorkspaceView(frame: .zero)
     let sidebar: SidebarViewController
@@ -29,8 +30,9 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     private var keyMonitor: Any?
     private(set) var isFullscreen = false
 
-    init(state: AppState) {
+    init(state: AppState, clipboard: NSPasteboard = .general) {
         self.state = state
+        self.clipboard = clipboard
         sidebar = SidebarViewController(state: state)
         gallery = GalleryViewController(state: state)
         viewer = ViewerViewController(state: state)
@@ -65,6 +67,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         gallery.onOpenFiles = { [weak self] in self?.openFiles(nil) }
         gallery.onOpen = { [weak self] in self?.openSelected(nil) }
         gallery.contextMenu = { [weak self] in self?.photoMenu() ?? NSMenu() }
+        viewer.contextMenu = { [weak self] in self?.photoMenu() ?? NSMenu() }
         viewer.onZoom = { [weak self] scale in self?.zoomLabel.stringValue = "\(Int((scale * 100).rounded()))%" }
         viewer.onReveal = { [weak self] in self?.showInFinder(nil) }
         viewer.onShare = { [weak self] in self?.share(nil) }
@@ -367,17 +370,36 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     func photoMenu() -> NSMenu {
         let menu = NSMenu()
-        for (title, action) in [("打开图像", #selector(openSelected)), (state.isFavorite ? "取消收藏" : "添加到个人收藏", #selector(favorite)), ("共享…", #selector(share)), ("在 Finder 中显示", #selector(showInFinder))] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        func add(_ title: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = .command, enabled: Bool? = nil) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
             item.target = self
-            item.isEnabled = state.selectedPhoto != nil
+            item.keyEquivalentModifierMask = modifiers
+            item.isEnabled = enabled ?? (state.selectedPhoto != nil)
             menu.addItem(item)
         }
+        add("打开图像", #selector(openSelected))
+        let grade = NSMenuItem(title: "评分：\(PhotoRating(state.selectedRating).title)", action: nil, keyEquivalent: "")
+        grade.submenu = ratingMenu()
+        menu.addItem(grade)
+        add(state.isFavorite ? "取消收藏" : "添加到个人收藏", #selector(favorite))
+        menu.addItem(.separator())
+        add("复制文件", #selector(copyFile), key: "c")
+        add("复制文件名", #selector(copyFileName))
+        add("复制文件路径", #selector(copyFilePath), key: "c", modifiers: [.command, .option])
+        add("粘贴文件", #selector(pasteFiles), key: "v", enabled: pasteDestination != nil && !copiedFileURLs.isEmpty)
+        menu.addItem(.separator())
+        add("在 Finder 中显示", #selector(showInFinder))
+        add("打开所在文件夹", #selector(openContainingFolder))
+        add("共享…", #selector(share))
+        menu.addItem(.separator())
+        add("重命名…", #selector(renameFile), enabled: canModifyPhoto)
+        add("制作副本", #selector(duplicateFile), enabled: canModifyPhoto)
+        add("移到废纸篓", #selector(moveToTrash), key: "\u{8}", enabled: canModifyPhoto)
         return menu
     }
     func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "无法打开"
+        alert.messageText = "操作未完成"
         alert.informativeText = message
         alert.alertStyle = .warning
         if let window { alert.beginSheetModal(for: window) }
@@ -385,6 +407,9 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
 
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
+        case #selector(copyFile), #selector(copyFileName), #selector(copyFilePath), #selector(openContainingFolder): return state.selectedPhoto != nil
+        case #selector(renameFile), #selector(duplicateFile), #selector(moveToTrash): return canModifyPhoto
+        case #selector(pasteFiles): return pasteDestination != nil && !copiedFileURLs.isEmpty
         case #selector(openSelected), #selector(favorite), #selector(share), #selector(showInFinder), #selector(toggleFullscreen), #selector(assignRating): return state.selectedPhoto != nil
         case #selector(zoomIn), #selector(zoomOut), #selector(fitImage), #selector(actualSize), #selector(rotateImage), #selector(toggleInspector): return state.mode == .viewer
         case #selector(back): return state.mode == .viewer || state.canGoBack
@@ -396,6 +421,16 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     private func handleKey(_ event: NSEvent) -> NSEvent? {
         guard event.window === window, !(window?.firstResponder is NSTextView) else { return event }
+        if event.modifierFlags.contains(.command), !event.modifierFlags.contains(.control) {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "c":
+                if event.modifierFlags.contains(.option) { copyFilePath(nil) } else { copyFile(nil) }
+                return nil
+            case "v": pasteFiles(nil); return nil
+            default:
+                if event.keyCode == 51 { moveToTrash(nil); return nil }
+            }
+        }
         if event.modifierFlags.contains(.control), event.modifierFlags.intersection([.command, .option, .shift]).isEmpty,
            let characters = event.charactersIgnoringModifiers, characters.count == 1, let score = Int(characters) {
             state.setRating(score)
@@ -423,7 +458,24 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         if state.mode == .viewer {
             window?.toolbar?.isVisible = false
             viewer.isFullscreen = true
+            window?.makeFirstResponder(viewer.canvas)
         }
+        layoutWorkspace()
+    }
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        isFullscreen = true
+        if state.mode == .viewer { window?.makeFirstResponder(viewer.canvas) }
+    }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        isFullscreen = false
+        viewer.isFullscreen = false
+        window.toolbar?.isVisible = true
+        layoutWorkspace()
+    }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) {
+        isFullscreen = true
+        viewer.isFullscreen = state.mode == .viewer
+        window.toolbar?.isVisible = state.mode != .viewer
         layoutWorkspace()
     }
     func windowWillExitFullScreen(_ notification: Notification) {

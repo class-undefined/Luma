@@ -246,6 +246,71 @@ final class AppState {
         }
     }
 
+    var currentDirectory: URL? {
+        if case .folder(let url) = source { return url }
+        return selectedPhoto?.url.deletingLastPathComponent()
+    }
+
+    func refresh(selecting url: URL? = nil) {
+        let preferred = url?.path ?? selectedID
+        let viewing = mode == .viewer
+        switch source {
+        case .favorites:
+            load(urls: existingURLs(Array(favoritePaths)), source: .favorites, title: "个人收藏", preferred: preferred, openViewer: viewing)
+        case .recent:
+            load(urls: existingURLs(recentPaths), source: .recent, title: "最近打开", preferred: preferred, openViewer: viewing)
+        case .folder(let directory):
+            load(urls: [directory], source: .folder(directory), title: directory.lastPathComponent, preferred: preferred, openViewer: viewing)
+        case .files:
+            load(urls: existingURLs(allPhotos.map(\.id)) + (url.map { [$0] } ?? []), source: .files, title: title, preferred: preferred, openViewer: viewing)
+        case .demo: showDemo()
+        }
+    }
+
+    func renamedFile(from old: URL, to new: URL) {
+        let oldID = old.standardizedFileURL.path, newID = new.standardizedFileURL.path
+        if let value = ratings.removeValue(forKey: oldID) { ratings[newID] = value }
+        if favoritePaths.remove(oldID) != nil { favoritePaths.insert(newID) }
+        recentPaths = recentPaths.map { $0 == oldID ? newID : $0 }
+        if let tags = defaults.stringArray(forKey: "tags:\(oldID)") {
+            defaults.set(tags, forKey: "tags:\(newID)")
+            defaults.removeObject(forKey: "tags:\(oldID)")
+        }
+        persistFileState()
+        rewriteHistory(from: oldID, to: new)
+        refresh(selecting: new)
+    }
+
+    func removedFile(_ url: URL) {
+        let id = url.standardizedFileURL.path
+        ratings.removeValue(forKey: id)
+        favoritePaths.remove(id)
+        recentPaths.removeAll { $0 == id }
+        defaults.removeObject(forKey: "tags:\(id)")
+        persistFileState()
+        rewriteHistory(from: id, to: nil)
+        refresh()
+    }
+
+    private func persistFileState() {
+        defaults.set(ratings, forKey: "ratings")
+        defaults.set(favoritePaths.sorted(), forKey: "favorites")
+        defaults.set(recentPaths, forKey: "recents")
+    }
+    private func rewriteHistory(from id: String, to url: URL?) {
+        func rewrite(_ entry: Location) -> Location {
+            let photos = entry.photos.compactMap { photo -> Photo? in
+                guard photo.id == id else { return photo }
+                return url.map { Photo(url: $0, metadata: photo.metadata) }
+            }
+            return Location(source: entry.source, title: entry.title, photos: photos,
+                            selectedID: entry.selectedID == id ? url?.path : entry.selectedID,
+                            query: entry.query, skipped: entry.skipped)
+        }
+        backHistory = backHistory.map(rewrite)
+        forwardHistory = forwardHistory.map(rewrite)
+    }
+
     private func load(urls: [URL], source: Source, title: String, preferred: String? = nil, openViewer: Bool = false) {
         loadTask?.cancel()
         let generation = UUID()

@@ -11,6 +11,7 @@ enum UIValidation {
         Task {
             let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("build/validation")
             var passed: [String] = []
+            var skipped: [String] = []
             @MainActor func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
                 guard condition() else { throw Failure(message: message) }
                 passed.append(message)
@@ -26,14 +27,27 @@ enum UIValidation {
             @MainActor func snapshot(_ name: String) async throws {
                 controller.window?.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
-                await settle(250)
+                await settle(500)
                 guard let window = controller.window else { return }
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                process.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", output.appendingPathComponent("\(name).png").path]
-                try process.run()
-                process.waitUntilExit()
-                if process.terminationStatus != 0 { throw Failure(message: "Window capture failed") }
+                let destination = output.appendingPathComponent("\(name).png")
+                let appkitDestination = output.appendingPathComponent("\(name).appkit.png")
+                for file in [destination, appkitDestination] where FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+                for _ in 0..<(hasActiveDisplay ? 3 : 0) {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    process.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", destination.path]
+                    process.standardError = FileHandle.nullDevice
+                    try process.run()
+                    process.waitUntilExit()
+                    if process.terminationStatus == 0 { return }
+                    await settle(250)
+                }
+                guard let view = window.contentView?.superview,
+                      let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw Failure(message: "Window capture failed") }
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                guard let png = bitmap.representation(using: .png, properties: [:]) else { throw Failure(message: "Window capture failed") }
+                try png.write(to: appkitDestination)
+                print("Snapshot \(name) used AppKit view rendering; WindowServer capture unavailable.")
             }
             @MainActor func key(_ code: UInt16, characters: String, modifiers: NSEvent.ModifierFlags = []) {
                 let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
@@ -144,14 +158,23 @@ enum UIValidation {
                 await settle(300)
                 try check(controller.state.selectedID != selected, "Arrow key event changes the selected image")
                 controller.state.select(selected)
-                controller.toggleFullscreen(nil)
-                await settle(1300)
-                try check(controller.isFullscreen && controller.viewer.isFullscreen, "Native fullscreen enables the glass controls")
-                try await snapshot("04-fullscreen")
-                key(53, characters: "\u{1B}")
-                await settle(1200)
-                try check(!controller.isFullscreen && controller.state.mode == .viewer, "Escape exits fullscreen and restores the viewer window")
-                try check(controller.window?.toolbar?.isVisible == true, "Viewer toolbar returns after fullscreen animation")
+                if hasActiveDisplay {
+                    controller.toggleFullscreen(nil)
+                    await settle(1300)
+                    try check(controller.isFullscreen && controller.viewer.isFullscreen, "Native fullscreen enables the glass controls")
+                    try await snapshot("04-fullscreen")
+                    controller.window?.makeFirstResponder(controller.viewer.canvas)
+                    key(53, characters: "\u{1B}")
+                    for _ in 0..<40 {
+                        if !controller.isFullscreen { break }
+                        await settle(100)
+                    }
+                    await settle(250)
+                    try check(!controller.isFullscreen && controller.state.mode == .viewer, "Escape exits fullscreen and restores the viewer window")
+                    try check(controller.window?.toolbar?.isVisible == true, "Viewer toolbar returns after fullscreen animation")
+                } else {
+                    skipped.append("Native fullscreen round trip: macOS session is locked or display is asleep")
+                }
                 key(53, characters: "\u{1B}")
                 await settle()
                 try check(controller.state.mode == .browser && controller.state.selectedID == selected, "Returning to browser preserves selection")
@@ -189,6 +212,7 @@ enum UIValidation {
                 try check(controller.state.visiblePhotos.isEmpty, "Removing the last favorite leaves a valid empty state")
                 try await snapshot("05-empty-favorites")
                 let fixtures = output.appendingPathComponent("Fixtures")
+                if FileManager.default.fileExists(atPath: fixtures.path) { try FileManager.default.removeItem(at: fixtures) }
                 try FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
                 for (index, photo) in controller.state.allPhotos.prefix(1).enumerated() {
                     let target = fixtures.appendingPathComponent("image\(index + 1).jpg")
@@ -201,9 +225,44 @@ enum UIValidation {
                 await settle(200)
                 try check(controller.state.mode == .viewer && controller.state.selectedPhoto?.url == target, "Opening a local file selects it in the native viewer")
                 try check(controller.state.recentPaths.contains(target.path), "Local file opening updates recent items")
-                try ("PASS\n" + passed.joined(separator: "\n") + "\n").write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
+                controller.state.setRating(7)
+                controller.state.toggleFavorite()
+                controller.state.defaults.set(["旅行"], forKey: "tags:\(target.path)")
+                let renamed = try PhotoFileOperations.rename(target, to: "renamed.jpg")
+                controller.state.renamedFile(from: target, to: renamed)
+                try await loaded()
+                try check(controller.state.selectedPhoto?.url == renamed && controller.state.selectedRating == 7 && controller.state.isFavorite,
+                          "Renaming a file keeps its grade and favorite state")
+                try check(controller.state.defaults.stringArray(forKey: "tags:\(renamed.path)") == ["旅行"], "Renaming a file moves its local tags")
+                controller.copyFileName(nil)
+                try check(controller.clipboard.string(forType: .string) == "renamed.jpg", "Context copy filename writes the real filesystem name")
+                controller.copyFilePath(nil)
+                try check(controller.clipboard.string(forType: .string) == renamed.path, "Context copy path writes the absolute file path")
+                controller.copyFile(nil)
+                try check(controller.copiedFileURLs == [renamed], "Copy file places a native file URL on an isolated pasteboard")
+                controller.pasteFiles(nil)
+                try await loaded()
+                let pasted = try requireURL(controller.state.selectedPhoto?.url)
+                try check(pasted != renamed && (try? Data(contentsOf: pasted)) == (try? Data(contentsOf: renamed)), "Pasting files copies image bytes without overwriting the original")
+                controller.duplicateFile(nil)
+                try await loaded()
+                try check(controller.state.selectedPhoto?.url != pasted && controller.state.allPhotos.count == 3, "Duplicate creates another file and refreshes the library")
+                let commands = controller.photoMenu().items.map(\.title)
+                try check(["复制文件名", "复制文件", "打开所在文件夹", "重命名…", "制作副本", "移到废纸篓"].allSatisfy(commands.contains), "Photo context menu contains standard filesystem actions")
+                let rawFixture = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Tests/LumaCoreTests/Fixtures/synthetic.dng")
+                let rawURL = fixtures.appendingPathComponent("camera.dng")
+                try FileManager.default.copyItem(at: rawFixture, to: rawURL)
+                controller.state.open([rawURL])
+                try await loaded()
+                for _ in 0..<50 {
+                    if controller.viewer.canvas.image != nil && controller.viewer.canvas.photo?.url == rawURL { break }
+                    await settle(50)
+                }
+                try check(controller.state.selectedPhoto?.metadata.isRAW == true && controller.viewer.canvas.image != nil, "Genuine Bayer DNG opens and renders in the native detail viewer")
+                try await snapshot("08-raw-viewer")
+                try ("PASS\n" + passed.joined(separator: "\n") + "\n" + skipped.map { "SKIP: " + $0 }.joined(separator: "\n") + "\n").write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
                 controller.state.defaults.removePersistentDomain(forName: domain)
-                print("Luma UI validation passed: \(passed.count) checks. Evidence: \(output.path)")
+                print("Luma UI validation passed: \(passed.count) checks, \(skipped.count) skipped. Evidence: \(output.path)")
                 NSApp.terminate(nil)
             } catch {
                 let message = (error as? Failure)?.message ?? error.localizedDescription
@@ -213,6 +272,14 @@ enum UIValidation {
                 Darwin.exit(1)
             }
         }
+    }
+    private static var hasActiveDisplay: Bool {
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        return session?["CGSSessionScreenIsLocked"] as? Bool != true && CGDisplayIsActive(CGMainDisplayID()) != 0
+    }
+    private static func requireURL(_ url: URL?) throws -> URL {
+        guard let url else { throw Failure(message: "Missing selected file URL") }
+        return url
     }
 }
 #endif

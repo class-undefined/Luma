@@ -24,7 +24,7 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
     let state: AppState
     let canvas = ImageCanvas(frame: .zero)
     let inspector: InspectorView
-    let filmstrip = NSCollectionView()
+    let filmstrip = GalleryCollectionView()
     let filmScroll = NSScrollView()
     private let filmMaterial = NSVisualEffectView()
     private let background = NSImageView()
@@ -49,6 +49,7 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
     var onShare: (() -> Void)?
     var onReveal: (() -> Void)?
     var onToggleFullscreen: (() -> Void)?
+    var contextMenu: (() -> NSMenu)?
 
     init(state: AppState) { self.state = state; inspector = InspectorView(state: state); super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -59,6 +60,8 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
         background.alphaValue = 0.28
         host.addSubview(background)
         host.addSubview(canvas)
+        canvas.contextMenu = { [weak self] in self?.contextMenu?() ?? NSMenu() }
+        filmstrip.contextMenu = { [weak self] in self?.contextMenu?() ?? NSMenu() }
         filmstrip.collectionViewLayout = FilmstripLayout()
         filmstrip.backgroundColors = [.clear]
         filmstrip.isSelectable = true

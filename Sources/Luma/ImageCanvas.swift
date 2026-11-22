@@ -9,6 +9,8 @@ final class ImageCanvas: NSView {
     private(set) var pan = NSPoint.zero
     var onZoom: ((CGFloat) -> Void)?
     var onDoubleClick: (() -> Void)?
+    var contextMenu: (() -> NSMenu)?
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenu?() }
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { true }
 
