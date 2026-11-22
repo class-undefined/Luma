@@ -7,7 +7,7 @@ final class WorkspaceView: FlippedView {
     override func layout() { super.layout(); onLayout?() }
 }
 
-final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate, NSUserInterfaceValidations, NSMenuDelegate {
+final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate, NSUserInterfaceValidations, NSMenuDelegate, NSSharingServicePickerDelegate {
     let state: AppState
     let clipboard: NSPasteboard
     let defaultApplications: DefaultApplicationSettings
@@ -29,9 +29,13 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     private let zoomLabel = label("100%", size: 11)
     let ratingFilterMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     let menuPresenter = MenuPresenter()
+    let toolbarBackdrop = ToolbarBackdrop(frame: .zero)
     private var lastMode: AppState.Mode?
     private var lastViewerStyle: ViewerStyle?
     private var keyMonitor: Any?
+    private var headerMonitor: Any?
+    private var layoutObservation: NSKeyValueObservation?
+    private var sharingPicker: NSSharingServicePicker?
     private(set) var isFullscreen = false
     private(set) var isTransitioningFullscreen = false
 
@@ -45,7 +49,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         status = StatusBar(state: state)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: min(1440, screen.width - 80), height: min(850, screen.height - 80)),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         super.init(window: window)
         window.delegate = self
         window.title = "Luma"
@@ -54,11 +58,12 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         window.toolbarStyle = .unified
         window.minSize = NSSize(width: 880, height: 580)
         window.isReleasedWhenClosed = false
+        window.acceptsMouseMovedEvents = true
         if state.defaults === UserDefaults.standard { window.setFrameAutosaveName("LumaMainWindow") }
         window.contentView = root
+        root.addSubview(toolbarBackdrop)
         root.addSubview(workspace)
-        workspace.autoresizingMask = [.width, .height]
-        workspace.frame = root.bounds
+        workspace.autoresizingMask = []
         workspace.addSubview(sidebar.view)
         workspace.addSubview(gallery.view)
         workspace.addSubview(viewer.view)
@@ -79,6 +84,10 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         viewer.onShare = { [weak self] source in self?.share(source) }
         viewer.onToggleFullscreen = { [weak self] in self?.toggleFullscreen(nil) }
         workspace.onLayout = { [weak self] in self?.layoutWorkspace() }
+        root.onLayout = { [weak self] in self?.layoutRoot() }
+        toolbarBackdrop.onVisibilityChange = { [weak self] visible in self?.setToolbarIconContrast(visible) }
+        menuPresenter.onTrackingChange = { [weak self] tracking in self?.toolbarBackdrop.trackMenu(tracking) }
+        layoutObservation = window.observe(\.contentLayoutRect, options: [.new]) { [weak self] _, _ in self?.layoutRoot() }
         state.onChange = { [weak self] change in self?.update(change) }
         state.onError = { [weak self] message in self?.showError(message) }
         configureToolbar()
@@ -86,9 +95,27 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event) ?? event
         }
+        headerMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .mouseExited]) { [weak self] event in
+            guard let self else { return event }
+            if event.window === self.window { self.toolbarBackdrop.updatePointer(event.locationInWindow) }
+            else if event.type == .mouseMoved { self.toolbarBackdrop.updatePointer(nil) }
+            return event
+        }
         window.center()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func layoutRoot() {
+        guard let window, !root.bounds.isEmpty else { return }
+        let content = root.convert(window.contentLayoutRect, from: nil).intersection(root.bounds)
+        guard !content.isNull else { return }
+        if workspace.frame != content { workspace.frame = content }
+        let height = max(0, content.minY - root.bounds.minY)
+        if toolbarBackdrop.appearance?.name != window.effectiveAppearance.name { toolbarBackdrop.appearance = window.effectiveAppearance }
+        toolbarBackdrop.frame = NSRect(x: root.bounds.minX, y: root.bounds.minY, width: root.bounds.width, height: height)
+        toolbarBackdrop.isEnabled = height > 0 && state.mode != .empty && !isFullscreen
+        layoutWorkspace()
+    }
 
     func layoutWorkspace() {
         let bounds = workspace.bounds
@@ -146,7 +173,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
             ratingFilterMenu.select(item)
         }
         status.update()
-        layoutWorkspace()
+        layoutRoot()
         validateToolbar()
         preferencesController?.refresh()
         if modeChanged && !viewing {
@@ -275,6 +302,13 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         for item in toolbarItems.values {
             if let button = item.view as? ActionButton { button.isEnabled = item.isEnabled }
         }
+        setToolbarIconContrast(toolbarBackdrop.showsBackground)
+    }
+    private func setToolbarIconContrast(_ visible: Bool) {
+        for item in toolbarItems.values {
+            guard let button = item.view as? ActionButton else { continue }
+            button.contentTintColor = visible ? (button.isEnabled ? .labelColor : .disabledControlTextColor) : nil
+        }
     }
 
     @objc func openFiles(_ sender: Any?) {
@@ -374,10 +408,18 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         if let photo = state.selectedPhoto { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
     }
     @objc func share(_ sender: Any?) {
-        guard let photo = state.selectedPhoto else { return }
+        guard let photo = state.selectedPhoto, sharingPicker == nil else { return }
         let anchor = menuAnchor(for: sender, toolbarItem: "share")
         let picker = NSSharingServicePicker(items: [photo.url])
+        picker.delegate = self
+        sharingPicker = picker
+        toolbarBackdrop.trackMenu(true)
         picker.show(relativeTo: anchor.rect, of: anchor.view, preferredEdge: anchor.preferredEdge)
+    }
+    func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, didChoose service: NSSharingService?) {
+        guard sharingPicker === sharingServicePicker else { return }
+        sharingPicker = nil
+        toolbarBackdrop.trackMenu(false)
     }
     @objc private func searchChanged() { state.setQuery(search.stringValue) }
     func controlTextDidChange(_ obj: Notification) { if obj.object as? NSSearchField === search { searchChanged() } }
@@ -539,5 +581,9 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         window?.toolbar?.isVisible = !state.isImageOnly
         layoutWorkspace()
     }
-    deinit { if let keyMonitor { NSEvent.removeMonitor(keyMonitor) } }
+    deinit {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let headerMonitor { NSEvent.removeMonitor(headerMonitor) }
+        layoutObservation?.invalidate()
+    }
 }

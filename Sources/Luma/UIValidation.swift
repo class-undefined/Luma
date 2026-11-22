@@ -17,12 +17,14 @@ final class ValidationApplicationAccess: DefaultApplicationAccess {
 
 @MainActor
 private final class MenuObservation {
+    var menu: NSMenu?
     var sourceMatches = false
     var anchorPoint: NSPoint?
     var frame: CGRect?
     var usesAccessibilityGeometry = false
     var timer: Timer?
     var finished = false
+    var backdropVisible = false
 }
 
 /// Runs against real AppKit views, with an isolated preferences domain.
@@ -32,6 +34,7 @@ enum UIValidation {
     struct Failure: Error { let message: String }
     static func run(_ controller: WindowController, domain: String) {
         Task {
+            let originalPointer = NSEvent.mouseLocation
             let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("build/validation")
             var passed: [String] = []
             var skipped: [String] = []
@@ -40,6 +43,11 @@ enum UIValidation {
                 passed.append(message)
             }
             @MainActor func settle(_ milliseconds: UInt64 = 160) async { try? await Task.sleep(nanoseconds: milliseconds * 1_000_000) }
+            @MainActor func restorePointer() {
+                if hasActiveDisplay {
+                    CGWarpMouseCursorPosition(CGPoint(x: originalPointer.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - originalPointer.y))
+                }
+            }
             @MainActor func loaded() async throws {
                 for _ in 0..<100 {
                     if !controller.state.isLoading { return }
@@ -49,8 +57,8 @@ enum UIValidation {
             }
             @MainActor func snapshot(_ name: String, of target: NSWindow? = nil) async throws {
                 guard let window = target ?? controller.window else { return }
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+                if !window.isKeyWindow { window.makeKeyAndOrderFront(nil) }
+                if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
                 await settle(500)
                 let destination = output.appendingPathComponent("\(name).png")
                 let appkitDestination = output.appendingPathComponent("\(name).appkit.png")
@@ -79,36 +87,49 @@ enum UIValidation {
                     isARepeat: false, keyCode: code)!
                 NSApp.postEvent(event, atStart: false)
             }
+            @MainActor func moveMouse(to point: NSPoint) async {
+                if hasActiveDisplay {
+                    let screenPoint = controller.window!.convertPoint(toScreen: point)
+                    CGWarpMouseCursorPosition(CGPoint(x: screenPoint.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - screenPoint.y))
+                }
+                let event = NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: controller.window!.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+                NSApp.postEvent(event, atStart: false)
+                await settle(220)
+            }
             @MainActor func toolbarMenu(_ identifier: String) async throws {
                 guard let button = controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == identifier })?.view as? NSButton else {
                     throw Failure(message: "Missing toolbar menu button: \(identifier)")
                 }
                 let observation = MenuObservation()
                 controller.menuPresenter.onWillPresent = { menu, anchor in
+                    observation.menu = menu
                     observation.sourceMatches = anchor.view === button
                     observation.anchorPoint = anchor.screenPoint
-                    let timer = Timer(timeInterval: 0.25, repeats: false) { _ in
+                    let timer = Timer(timeInterval: 0.35, repeats: false) { _ in
                         MainActor.assumeIsolated {
+                            guard let menu = observation.menu else { return }
+                            observation.backdropVisible = controller.toolbarBackdrop.showsBackground
+                            let accessibleFrame = menu.accessibilityFrame()
+                            if !accessibleFrame.isEmpty {
+                                observation.frame = accessibleFrame
+                                observation.usesAccessibilityGeometry = true
+                            }
                             let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
                             for window in windows where window[kCGWindowOwnerPID as String] as? Int32 == ProcessInfo.processInfo.processIdentifier &&
                                 (window[kCGWindowLayer as String] as? Int ?? 0) >= NSWindow.Level.popUpMenu.rawValue {
                                 if let bounds = window[kCGWindowBounds as String] as? NSDictionary,
                                    let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary), frame.height > 50 {
-                                    observation.frame = frame
+                                    if !observation.usesAccessibilityGeometry { observation.frame = frame }
                                     if let id = window[kCGWindowNumber as String] as? Int, hasActiveDisplay {
                                         let capture = Process()
                                         capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
                                         capture.arguments = ["-x", "-o", "-l", "\(id)", output.appendingPathComponent("13-menu-\(identifier).png").path]
-                                        try? capture.run()
-                                        capture.waitUntilExit()
+                                        if (try? capture.run()) != nil { capture.waitUntilExit() }
                                     }
                                     break
                                 }
-                            }
-                            let accessibleFrame = menu.accessibilityFrame()
-                            if !accessibleFrame.isEmpty {
-                                observation.frame = accessibleFrame
-                                observation.usesAccessibilityGeometry = true
                             }
                             menu.cancelTrackingWithoutAnimation()
                             observation.finished = true
@@ -118,7 +139,12 @@ enum UIValidation {
                     RunLoop.main.add(timer, forMode: .eventTracking)
                     RunLoop.main.add(timer, forMode: .common)
                 }
-                defer { observation.timer?.invalidate(); controller.menuPresenter.onWillPresent = nil }
+                defer {
+                    observation.timer?.invalidate()
+                    observation.timer = nil
+                    observation.menu = nil
+                    controller.menuPresenter.onWillPresent = nil
+                }
                 let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
                 for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                     let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
@@ -128,10 +154,14 @@ enum UIValidation {
                 }
                 for _ in 0..<50 { if observation.finished { break }; await settle(50) }
                 try check(observation.sourceMatches, "\(identifier) popup is anchored to the actual clicked toolbar button")
+                try check(observation.backdropVisible, "\(identifier) menu keeps the toolbar background visible while tracking")
                 if hasActiveDisplay {
                     guard let frame = observation.frame, let point = observation.anchorPoint else { throw Failure(message: "Missing onscreen popup geometry: \(identifier)") }
                     let top = observation.usesAccessibilityGeometry ? frame.maxY : (NSScreen.screens.first?.frame.maxY ?? 0) - frame.minY
                     let allowance: CGFloat = observation.usesAccessibilityGeometry ? 30 : 100
+                    if abs(top - point.y) >= allowance {
+                        print("Popup geometry", identifier, "frame", frame, "anchor", point, "accessibility", observation.usesAccessibilityGeometry)
+                    }
                     try check(abs(top - point.y) < allowance && frame.minX <= point.x + allowance && frame.maxX >= point.x - allowance,
                               "\(identifier) native popup appears directly below its toolbar button")
                 }
@@ -216,6 +246,36 @@ enum UIValidation {
                 controller.openSelected(nil)
                 await settle(700)
                 try check(controller.state.mode == .viewer && controller.viewer.canvas.image != nil, "Viewer decodes the selected original")
+                let bodyPoint = controller.viewer.canvas.convert(NSPoint(x: controller.viewer.canvas.bounds.midX, y: controller.viewer.canvas.bounds.midY), to: nil)
+                await moveMouse(to: bodyPoint)
+                try check(!controller.toolbarBackdrop.showsBackground, "Toolbar background is transparent while the pointer is over the photo")
+                try await snapshot("14-toolbar-idle")
+                let headerPoint = controller.toolbarBackdrop.convert(NSPoint(x: controller.toolbarBackdrop.bounds.midX, y: controller.toolbarBackdrop.bounds.midY), to: nil)
+                await moveMouse(to: headerPoint)
+                try check(controller.toolbarBackdrop.showsBackground && controller.toolbarBackdrop.alphaValue > 0.9, "Moving into the titlebar reveals an opaque toolbar backdrop")
+                let moreButton = controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == "more" })?.view as? NSButton
+                try check(moreButton?.contentTintColor != nil, "Hovered toolbar icons receive a contrasting foreground color")
+                try check(controller.toolbarBackdrop.hitTest(.zero) == nil, "Toolbar backdrop passes clicks through to native controls")
+                try check(controller.workspace.frame.minY >= controller.toolbarBackdrop.frame.maxY - 1, "Toolbar backdrop does not cover the photo or inspector")
+                try await snapshot("15-toolbar-hover")
+                if !controller.toolbarBackdrop.showsBackground {
+                    print("Hover pointer changed during capture", controller.window!.mouseLocationOutsideOfEventStream, "expected", headerPoint)
+                }
+                try check(controller.toolbarBackdrop.showsBackground, "Hover backdrop remains visible while the pointer stays in the titlebar")
+                await moveMouse(to: bodyPoint)
+                try check(!controller.toolbarBackdrop.showsBackground && controller.toolbarBackdrop.alphaValue < 0.1, "Leaving the titlebar restores its transparent background")
+                controller.toolbarBackdrop.trackMenu(true)
+                controller.toolbarBackdrop.trackMenu(true)
+                controller.toolbarBackdrop.trackMenu(false)
+                try check(controller.toolbarBackdrop.showsBackground, "A nested sharing popup keeps the backdrop after its parent menu closes")
+                controller.toolbarBackdrop.trackMenu(false)
+                await moveMouse(to: bodyPoint)
+                let originalFrame = controller.window!.frame
+                controller.window?.setContentSize(NSSize(width: 1050, height: 720))
+                await settle()
+                try check(abs(controller.toolbarBackdrop.frame.width - controller.root.bounds.width) < 1, "Hover backdrop follows the resized window width")
+                controller.window?.setFrame(originalFrame, display: true)
+                await settle()
                 try await toolbarMenu("rating")
                 try await toolbarMenu("more")
                 let shareButton = controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == "share" })?.view
@@ -438,12 +498,14 @@ enum UIValidation {
                 try ("PASS\n" + passed.joined(separator: "\n") + "\n" + skipped.map { "SKIP: " + $0 }.joined(separator: "\n") + "\n").write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
                 controller.state.defaults.removePersistentDomain(forName: domain)
                 print("Luma UI validation passed: \(passed.count) checks, \(skipped.count) skipped. Evidence: \(output.path)")
+                restorePointer()
                 NSApp.terminate(nil)
             } catch {
                 let message = (error as? Failure)?.message ?? error.localizedDescription
                 try? ("FAIL: \(message)\n" + passed.joined(separator: "\n")).write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
                 controller.state.defaults.removePersistentDomain(forName: domain)
                 fputs("Luma UI validation failed: \(message)\n", stderr)
+                restorePointer()
                 Darwin.exit(1)
             }
         }

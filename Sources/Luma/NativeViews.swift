@@ -46,6 +46,7 @@ final class ActionButton: NSButton {
 
 final class DropView: FlippedView {
     var onDrop: (([URL]) -> Void)?
+    var onLayout: (() -> Void)?
     private var highlighted = false
 
     override init(frame: NSRect) {
@@ -53,6 +54,12 @@ final class DropView: FlippedView {
         registerForDraggedTypes([.fileURL])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layout() { super.layout(); onLayout?() }
+    override func mouseDown(with event: NSEvent) {
+        if let window, window.styleMask.contains(.fullSizeContentView), event.locationInWindow.y >= window.contentLayoutRect.maxY {
+            window.performDrag(with: event)
+        } else { super.mouseDown(with: event) }
+    }
     private func urls(_ sender: NSDraggingInfo) -> [URL] {
         sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
     }
