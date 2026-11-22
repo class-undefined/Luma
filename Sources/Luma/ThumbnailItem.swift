@@ -1,8 +1,20 @@
 import AppKit
 import LumaCore
 
+final class CroppedImageView: NSImageView {
+    override func draw(_ dirtyRect: NSRect) {
+        guard let image, bounds.width > 0, bounds.height > 0 else { return }
+        let scale = max(bounds.width / image.size.width, bounds.height / image.size.height)
+        let crop = NSSize(width: bounds.width / scale, height: bounds.height / scale)
+        let source = NSRect(x: (image.size.width - crop.width) / 2, y: (image.size.height - crop.height) / 2,
+                            width: crop.width, height: crop.height)
+        NSGraphicsContext.current?.imageInterpolation = .high
+        image.draw(in: bounds, from: source, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
+}
+
 final class ThumbnailView: FlippedView {
-    let preview = NSImageView()
+    let preview = CroppedImageView()
     let selectionRing = NSView()
     let filename = label(size: 12)
     var photo: Photo? { didSet { needsLayout = true; setAccessibilityLabel(photo?.name) } }
@@ -40,10 +52,7 @@ final class ThumbnailView: FlippedView {
     override func layout() {
         super.layout()
         let maxHeight = max(1, bounds.height - (filmstrip ? 22 : 32))
-        let ratio = photo?.metadata.aspectRatio ?? 1.5
-        let width = min(bounds.width - (filmstrip ? 4 : 0), maxHeight * ratio)
-        let height = width / ratio
-        preview.frame = NSRect(x: (bounds.width - width) / 2, y: (maxHeight - height) / 2, width: width, height: height)
+        preview.frame = NSRect(x: filmstrip ? 2 : 0, y: 0, width: max(1, bounds.width - (filmstrip ? 4 : 0)), height: maxHeight)
         preview.layer?.cornerRadius = filmstrip ? 6 : 10
         selectionRing.frame = preview.frame.insetBy(dx: -2, dy: -2)
         selectionRing.layer?.cornerRadius = filmstrip ? 8 : 12

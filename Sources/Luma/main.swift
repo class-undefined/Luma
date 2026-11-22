@@ -100,7 +100,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(image, "适合窗口", #selector(WindowController.fitImage(_:)), "0")
         add(image, "实际大小", #selector(WindowController.actualSize(_:)), "1")
         add(image, "向左旋转", #selector(WindowController.rotateImage(_:)), "l")
-        add(image, "播放或暂停幻灯片", #selector(WindowController.slideshow(_:)), "p")
         let windows = submenu("窗口")
         windows.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windows.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")

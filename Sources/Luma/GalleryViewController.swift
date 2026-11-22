@@ -44,7 +44,7 @@ final class GalleryScrollView: NSScrollView {
     private var accumulator = ScrollStepAccumulator()
     override func scrollWheel(with event: NSEvent) {
         let result = accumulator.handle(delta: Double(event.scrollingDeltaY), precise: event.hasPreciseScrollingDeltas,
-                                        control: event.modifierFlags.contains(.control),
+                                        control: !event.modifierFlags.intersection([.command, .control]).isEmpty,
                                         momentum: event.momentumPhase != [], began: event.phase.contains(.began),
                                         timestamp: event.timestamp)
         if result.consumed {

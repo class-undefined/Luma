@@ -36,14 +36,12 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
     private var imageTask: Task<Void, Never>?
     private var displayedID: String?
     private var syncingSelection = false
-    private var slideshow: Timer?
     private var hud: NSView!
     private var filenameGlass: NSView!
     private let filename = label(size: 12)
     private let position = label(size: 12)
     private let zoom = label(size: 12)
     private let favoriteButton = ActionButton(symbol: "heart", title: "收藏")
-    private let playButton = ActionButton(symbol: "play.fill", title: "播放幻灯片")
     private let exitButton = ActionButton(symbol: "arrow.down.right.and.arrow.up.left", title: "退出全屏")
     private var hudControls: [NSView] = []
     var isFullscreen = false { didSet { updateLayout() } }
@@ -134,12 +132,11 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
         let share = button("square.and.arrow.up", "共享") { [weak self] in self?.onShare?() }
         let exit = button("arrow.down.right.and.arrow.up.left", "退出全屏") { [weak self] in self?.onToggleFullscreen?() }
         favoriteButton.actionHandler = { [weak self] in self?.state.toggleFavorite() }
-        playButton.actionHandler = { [weak self] in self?.toggleSlideshow() }
         position.alignment = .center
         zoom.alignment = .center
-        hudControls = [previous, position, next, minus, zoom, plus, fit, favoriteButton, rotate, share, playButton, exit]
+        hudControls = [previous, position, next, minus, zoom, plus, fit, favoriteButton, rotate, share, exit]
         for control in hudControls { controls.addSubview(control) }
-        controls.frame = NSRect(x: 0, y: 0, width: 626, height: 56)
+        controls.frame = NSRect(x: 0, y: 0, width: 584, height: 56)
         hud = glass(content: controls, radius: 28)
         host.addSubview(hud)
         filename.alignment = .center
@@ -169,8 +166,8 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
         hud.isHidden = !isFullscreen
         filenameGlass.isHidden = !isFullscreen
         exitButton.isHidden = !isFullscreen
-        hud.frame = NSRect(x: (bounds.width - 626) / 2, y: bounds.height - 98, width: 626, height: 56)
-        let widths: [CGFloat] = [32, 54, 32, 32, 54, 32, 32, 32, 32, 32, 32, 32]
+        hud.frame = NSRect(x: (bounds.width - 584) / 2, y: bounds.height - 98, width: 584, height: 56)
+        let widths: [CGFloat] = [32, 54, 32, 32, 54, 32, 32, 32, 32, 32, 32]
         var x: CGFloat = 12
         for (index, control) in hudControls.enumerated() {
             if [3, 7].contains(index) { x += 12 }
@@ -223,26 +220,6 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
             self.spinner.stopAnimation(nil)
             self.imageError.isHidden = image != nil
         }
-    }
-    var isPlaying: Bool { slideshow != nil }
-    func toggleSlideshow() {
-        if slideshow != nil { stopSlideshow(); return }
-        guard photos.count > 1 else { return }
-        slideshow = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if self.state.selectedIndex == self.photos.count - 1 { self.state.select(self.photos.first?.id) }
-                else { self.state.navigate(1) }
-            }
-        }
-        playButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "暂停幻灯片")
-        playButton.toolTip = "暂停幻灯片"
-    }
-    func stopSlideshow() {
-        slideshow?.invalidate()
-        slideshow = nil
-        playButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "播放幻灯片")
-        playButton.toolTip = "播放幻灯片"
     }
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int { photos.count }
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {

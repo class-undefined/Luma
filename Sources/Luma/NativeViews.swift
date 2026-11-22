@@ -27,8 +27,9 @@ final class ActionButton: NSButton {
 
     init(symbol: String, title: String, size: CGFloat = 16, action: (() -> Void)? = nil) {
         super.init(frame: .zero)
-        image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-            .withSymbolConfiguration(.init(pointSize: size, weight: .regular))
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        symbolConfiguration = .init(pointSize: size, weight: .regular, scale: .small)
+        imageScaling = .scaleProportionallyDown
         imagePosition = .imageOnly
         isBordered = false
         bezelStyle = .toolbar

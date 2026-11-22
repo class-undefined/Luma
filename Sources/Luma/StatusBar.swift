@@ -5,7 +5,7 @@ final class StatusBar: FlippedView {
     let path = label(size: 10, color: .secondaryLabelColor)
     let count = label(size: 10, color: .secondaryLabelColor)
     let profile = label(size: 10, color: .secondaryLabelColor)
-    let hint = label("⌃ 滚轮", size: 10, color: .tertiaryLabelColor)
+    let hint = label("⌘ 滚轮", size: 10, color: .tertiaryLabelColor)
     let sizeMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     let slider = NSSlider(value: 2, minValue: 0, maxValue: 4, target: nil, action: nil)
     let smaller = ActionButton(symbol: "photo", title: "减小缩略图", size: 12)

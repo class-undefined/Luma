@@ -50,6 +50,10 @@ enum UIValidation {
                 await settle(400)
                 try check(controller.state.visiblePhotos.count == 12, "Demo library loads 12 real images")
                 try check(controller.state.selectedPhoto?.name == "DSCF_2408.jpg", "Initial selection survives collection reload")
+                let landscape = (controller.gallery.collection.item(at: IndexPath(item: 0, section: 0)) as? ThumbnailItem)?.thumbnail
+                let portrait = (controller.gallery.collection.item(at: IndexPath(item: 6, section: 0)) as? ThumbnailItem)?.thumbnail
+                try check(landscape != nil && portrait != nil && landscape?.preview.frame.size == portrait?.preview.frame.size,
+                          "Landscape and portrait thumbnails use identical card frames")
                 let selected = controller.state.selectedID
                 for size in ThumbnailSize.allCases {
                     controller.state.setSize(size)
@@ -88,6 +92,10 @@ enum UIValidation {
                 wheel.flags = .maskControl
                 controller.gallery.gridScroll.scrollWheel(with: NSEvent(cgEvent: wheel)!)
                 try check(controller.state.thumbnailSize == .medium, "Control wheel event reaches native gallery size handling")
+                wheel.flags = .maskCommand
+                controller.gallery.gridScroll.scrollWheel(with: NSEvent(cgEvent: wheel)!)
+                try check(controller.state.thumbnailSize == .small, "Command wheel changes native gallery size")
+                controller.state.setSize(.medium)
                 controller.state.setListMode(true)
                 await settle()
                 try check(!controller.gallery.listScroll.isHidden, "Native list view opens")
@@ -127,9 +135,6 @@ enum UIValidation {
                 await settle(300)
                 try check(controller.state.selectedID != selected, "Arrow key event changes the selected image")
                 controller.state.select(selected)
-                controller.slideshow(nil)
-                try check(controller.viewer.isPlaying, "Slideshow starts")
-                controller.viewer.stopSlideshow()
                 controller.toggleFullscreen(nil)
                 await settle(1300)
                 try check(controller.isFullscreen && controller.viewer.isFullscreen, "Native fullscreen enables the glass controls")

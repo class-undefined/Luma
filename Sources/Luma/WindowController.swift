@@ -109,7 +109,6 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
             window?.appearance = viewing ? NSAppearance(named: .darkAqua) : nil
             viewer.isFullscreen = viewing && isFullscreen
             configureToolbar()
-            if !viewing { viewer.stopSlideshow() }
         }
         window?.title = state.mode == .empty ? "Luma" : "\(state.selectedPhoto?.name ?? state.title) — Luma"
         titleLabel.stringValue = viewing ? state.selectedPhoto?.name ?? "Luma" : state.mode == .empty ? "Luma" : state.title
@@ -153,11 +152,13 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         viewMode.segmentStyle = .separated
         viewMode.setWidth(34, forSegment: 0)
         viewMode.setWidth(34, forSegment: 1)
-        titleView.frame = NSRect(x: 0, y: 0, width: 200, height: 36)
+        let viewing = state.mode == .viewer
+        titleView.frame = NSRect(x: 0, y: 0, width: viewing ? 260 : 200, height: 32)
         titleLabel.alignment = state.mode == .empty ? .center : .left
-        titleLabel.frame = NSRect(x: 0, y: state.mode == .empty ? 9 : 17, width: 200, height: 18)
+        titleLabel.font = .systemFont(ofSize: viewing ? 13 : 12, weight: .medium)
+        titleLabel.frame = NSRect(x: 0, y: viewing || state.mode == .empty ? 7 : 15, width: titleView.frame.width, height: 18)
         subtitleLabel.frame = NSRect(x: 0, y: 1, width: 200, height: 16)
-        subtitleLabel.isHidden = state.mode == .empty
+        subtitleLabel.isHidden = state.mode == .empty || viewing
         titleView.addSubview(titleLabel); titleView.addSubview(subtitleLabel)
         let toolbar = NSToolbar(identifier: "LumaBrowserToolbar")
         toolbar.delegate = self
@@ -217,11 +218,11 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         return item
     }
     private func configure(_ item: NSToolbarItem, symbol: String, label: String, action: Selector) {
-        let button = ActionButton(symbol: symbol, title: label)
+        let button = ActionButton(symbol: symbol, title: label, size: state.mode == .viewer ? 13 : 14)
         button.actionHandler = { [weak self] in _ = self?.perform(action, with: nil) }
-        button.frame = NSRect(x: 0, y: 0, width: 32, height: 32)
-        button.widthAnchor.constraint(equalToConstant: 32).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        button.frame = NSRect(x: 0, y: 0, width: 28, height: 28)
+        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
         item.view = button
         item.autovalidates = false
         item.label = label
@@ -235,7 +236,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         toolbarItems["forward"]?.isEnabled = state.canGoForward
         toolbarItems["sort"]?.isEnabled = state.hasPhotos
         toolbarItems["sidebar"]?.isEnabled = state.mode != .empty
-        (toolbarItems["favorite"]?.view as? NSButton)?.image = NSImage(systemSymbolName: state.isFavorite ? "heart.fill" : "heart", accessibilityDescription: "收藏")?.withSymbolConfiguration(.init(pointSize: 16, weight: .regular))
+        (toolbarItems["favorite"]?.view as? NSButton)?.image = NSImage(systemSymbolName: state.isFavorite ? "heart.fill" : "heart", accessibilityDescription: "收藏")
         toolbarItems["favorite"]?.toolTip = state.isFavorite ? "取消收藏（⌘D）" : "收藏（⌘D）"
         for item in toolbarItems.values {
             if let button = item.view as? ActionButton { button.isEnabled = item.isEnabled }
@@ -273,10 +274,6 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     @objc func fitImage(_ sender: Any?) { viewer.canvas.fit() }
     @objc func actualSize(_ sender: Any?) { viewer.canvas.actualSize() }
     @objc func rotateImage(_ sender: Any?) { viewer.canvas.rotate() }
-    @objc func slideshow(_ sender: Any?) {
-        if state.mode != .viewer { state.showViewer() }
-        viewer.toggleSlideshow()
-    }
     @objc func toggleFullscreen(_ sender: Any?) {
         if state.mode != .viewer { state.showViewer() }
         guard state.hasPhotos else { return }
@@ -342,7 +339,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
 
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
-        case #selector(openSelected), #selector(favorite), #selector(share), #selector(showInFinder), #selector(toggleFullscreen), #selector(slideshow): return state.selectedPhoto != nil
+        case #selector(openSelected), #selector(favorite), #selector(share), #selector(showInFinder), #selector(toggleFullscreen): return state.selectedPhoto != nil
         case #selector(zoomIn), #selector(zoomOut), #selector(fitImage), #selector(actualSize), #selector(rotateImage), #selector(toggleInspector): return state.mode == .viewer
         case #selector(back): return state.mode == .viewer || state.canGoBack
         case #selector(forward): return state.canGoForward
@@ -364,7 +361,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         switch event.keyCode {
         case 123: state.navigate(-1)
         case 124: state.navigate(1)
-        case 49: viewer.toggleSlideshow()
+        case 49: break
         case 36: back(nil)
         default: return event
         }
@@ -384,7 +381,6 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         window?.toolbar?.isVisible = true
         layoutWorkspace()
     }
-    func windowWillClose(_ notification: Notification) { viewer.stopSlideshow() }
     func windowDidExitFullScreen(_ notification: Notification) {
         window?.toolbar?.isVisible = true
         layoutWorkspace()
