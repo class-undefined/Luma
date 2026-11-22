@@ -10,9 +10,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Optional package version, e.g. 0.2.1 or 0.3.0-rc.1 (build only)'
+        description: 'Optional version, e.g. 0.2.1 or 0.3.0-rc.1'
         required: false
         type: string
+      publish:
+        description: 'Create a Release if this version has not been published'
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -29,30 +34,31 @@ jobs:
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       artifact: ${{ steps.metadata.outputs.artifact }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      source_sha: ${{ steps.metadata.outputs.source_sha }}
+      publish: ${{ steps.metadata.outputs.publish }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Resolve package version
         id: metadata
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
-        run: |
-          source scripts/release-common.sh
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            version="$(luma_normalize_version "$GITHUB_REF_NAME")"
-          elif [[ -n "$INPUT_VERSION" ]]; then
-            version="$(luma_normalize_version "$INPUT_VERSION")"
-          else
-            version="$(luma_normalize_version "$(luma_source_version "$PWD")")"
-          fi
-          printf 'version=%s\nartifact=Luma-%s-macOS-universal\n' "$version" "$version" >> "$GITHUB_OUTPUT"
+        run: ./scripts/ci-release-plan.sh
 
       - name: Check shell syntax
         run: bash -n scripts/*.sh
+
+      - name: Test release event planning
+        run: python3 scripts/test-release-plan.py
 
       - name: Test core behavior
         run: swift test
@@ -97,7 +103,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: build
-    if: github.event_name == 'release' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+    if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -117,15 +123,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_SHA: ${{ needs.build.outputs.source_sha }}
         shell: bash
         run: |
           assets=(dist/*.dmg dist/*.sha256)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
-            args=(--verify-tag --title "Luma $RELEASE_VERSION" --generate-notes)
+            args=(--target "$RELEASE_SHA" --title "Luma $RELEASE_VERSION" --generate-notes)
             if [[ "${RELEASE_VERSION%%+*}" == *-* ]]; then args+=(--prerelease); fi
             gh release create "$RELEASE_TAG" "${assets[@]}" "${args[@]}"
           fi
