@@ -2,7 +2,31 @@
 
 [![Build and Release](https://github.com/class-undefined/Luma/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/class-undefined/Luma/actions/workflows/build-and-release.yml)
 
-Luma 是按 `design/Luma-macOS.figcraft` 实现的 macOS 原生图片查看器。界面使用 AppKit，图片解码使用 ImageIO，图标使用 SF Symbols。RAW 原图使用 Core Image 解码。项目没有第三方依赖。
+Luma 是一款 macOS 原生图片查看器，支持 RAW、照片评分筛选、纯图片查看和默认图片应用设置。界面使用 AppKit，图片解码使用 ImageIO 和 Core Image。项目没有第三方依赖。
+
+[下载最新版本](https://github.com/class-undefined/Luma/releases/latest) · [查看全部版本](https://github.com/class-undefined/Luma/releases)
+
+## 应用界面
+
+以下为应用实际运行截图，使用仓库内的[示例照片](Sources/Luma/Resources/Demo/manifest.json)。
+
+### 照片详情
+
+完整图片、评分、文件信息与胶片栏集中在一个窗口中。
+
+![Luma 照片详情界面](docs/screenshots/viewer.png)
+
+### 图库浏览
+
+统一画幅卡片、文件夹侧栏、评分筛选和五档缩略图大小。
+
+![Luma 图库浏览界面](docs/screenshots/browser.png)
+
+### 原生偏好设置
+
+选择默认打开模式，调整显示选项，管理图片格式的默认查看器。
+
+<img src="docs/screenshots/settings.png" alt="Luma 原生偏好设置界面" width="620">
 
 ## 运行
 
@@ -64,24 +88,40 @@ shasum -a 256 -c Luma-0.2.1-universal.dmg.sha256
 
 公开仓库位于 [class-undefined/Luma](https://github.com/class-undefined/Luma)。工作流定义在 `.github/workflows/build-and-release.yml`。
 
-- 推送 `main` 或提交 Pull Request：运行核心测试，构建并校验通用 DMG，上传 Actions 构建产物。
-- 推送 `v*` 版本标签：测试和打包成功后，自动创建 GitHub Release，上传 DMG 和 SHA-256 文件。
-- 发布已有 GitHub Release：构建对应标签的安装盘，补齐或更新 Release 附件。
-- 手动运行工作流：可以指定版本，只构建并上传 Actions 产物。
+- 推送 `main`：运行测试、构建并校验 DMG。应用版本尚未发布时，自动创建 `v<版本>` 标签和 GitHub Release，并上传安装包及 SHA-256 文件。
+- 已发布的同版本：保留原有标签和完整附件，不因文档提交重复覆盖。更新应用后，需要先修改版本号。
+- 提交 Pull Request：测试和打包，不创建标签或 Release。
+- 推送 `v*` 标签或发布已有 Release：为该标签构建并补齐附件。
+- 手动运行：默认发布缺失的版本，可将 `publish` 设为 `false` 以只生成 Actions 产物。
 
-发布当前版本：
+后续发版时，更新应用版本并推送到 `main`：
 
 ```bash
-git tag v0.2.1
-git push origin v0.2.1
+/usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.2.2' Packaging/Info.plist
+git add Packaging/Info.plist
+git commit -m "release: prepare 0.2.2"
+git push origin main
 ```
 
-也可以使用 `v0.3.0-rc.1` 等预发布标签，工作流会将新建的 Release 标记为预发布。标签决定安装包版本，GitHub 运行编号用作应用构建编号。发布任务只在测试、打包和校验全部成功后执行。
-
-手动检查打包流程：
+也可以继续通过标签发版：
 
 ```bash
-gh workflow run build-and-release.yml --ref main
+git tag v0.2.2
+git push origin v0.2.2
+```
+
+`v0.3.0-rc.1` 等预发布标签会生成预发布 Release。已有标签但附件不完整时，工作流会从该标签对应的提交重建，保证安装包与标签源码一致。GitHub 运行编号用作应用构建编号。
+
+手动运行并发布：
+
+```bash
+gh workflow run build-and-release.yml --ref main -f publish=true
+```
+
+仅检查打包流程：
+
+```bash
+gh workflow run build-and-release.yml --ref main -f publish=false
 gh run list --workflow build-and-release.yml
 ```
 
