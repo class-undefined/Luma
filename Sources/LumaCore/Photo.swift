@@ -64,17 +64,18 @@ public struct ImageMetadata: Hashable, Sendable {
 }
 
 public enum PhotoSort: String, CaseIterable, Sendable {
-    case name, newest, oldest, size
+    case name, newest, oldest, size, rating
     public var title: String {
         switch self {
         case .name: return "名称"
         case .newest: return "修改时间（最新优先）"
         case .oldest: return "修改时间（最早优先）"
         case .size: return "文件大小"
+        case .rating: return "评分（高分优先）"
         }
     }
 
-    public func sorted(_ photos: [Photo]) -> [Photo] {
+    public func sorted(_ photos: [Photo], ratings: [String: Int] = [:]) -> [Photo] {
         photos.sorted { a, b in
             switch self {
             case .name: break
@@ -84,6 +85,9 @@ public enum PhotoSort: String, CaseIterable, Sendable {
                 if left != right { return self == .newest ? left > right : left < right }
             case .size:
                 if a.metadata.byteCount != b.metadata.byteCount { return a.metadata.byteCount > b.metadata.byteCount }
+            case .rating:
+                let left = ratings[a.id] ?? 0, right = ratings[b.id] ?? 0
+                if left != right { return left > right }
             }
             let comparison = a.name.localizedStandardCompare(b.name)
             return comparison == .orderedSame ? a.id < b.id : comparison == .orderedAscending

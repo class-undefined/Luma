@@ -206,6 +206,9 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
         favoriteButton.image = NSImage(systemSymbolName: state.isFavorite ? "heart.fill" : "heart", accessibilityDescription: "收藏")
         favoriteButton.contentTintColor = state.isFavorite ? .systemPink : .labelColor
         inspector.update(photo)
+        for case let item as ThumbnailItem in filmstrip.visibleItems() {
+            if let photo = item.thumbnail.photo { item.thumbnail.rating = state.rating(for: photo.id) }
+        }
         guard displayedID != photo.id else { return }
         displayedID = photo.id
         canvas.display(photo)
@@ -224,7 +227,7 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int { photos.count }
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         let item = collectionView.makeItem(withIdentifier: .init("film"), for: indexPath) as! ThumbnailItem
-        item.configure(photos[indexPath.item], filmstrip: true)
+        item.configure(photos[indexPath.item], filmstrip: true, rating: state.rating(for: photos[indexPath.item].id))
         return item
     }
     func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {

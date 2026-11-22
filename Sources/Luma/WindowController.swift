@@ -7,7 +7,7 @@ final class WorkspaceView: FlippedView {
     override func layout() { super.layout(); onLayout?() }
 }
 
-final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate, NSUserInterfaceValidations {
+final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate, NSUserInterfaceValidations, NSMenuDelegate {
     let state: AppState
     let root = DropView(frame: .zero)
     let workspace = WorkspaceView(frame: .zero)
@@ -24,6 +24,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     private var toolbarItems: [String: NSToolbarItem] = [:]
     private let separator = NSBox()
     private let zoomLabel = label("100%", size: 11)
+    let ratingFilterMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private var lastMode: AppState.Mode?
     private var keyMonitor: Any?
     private(set) var isFullscreen = false
@@ -128,6 +129,9 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         }
         sidebar.reload()
         viewMode.selectedSegment = state.listMode ? 1 : 0
+        if let item = ratingFilterMenu.itemArray.first(where: { $0.representedObject as? String == state.ratingFilter.stored }) {
+            ratingFilterMenu.select(item)
+        }
         status.update()
         layoutWorkspace()
         validateToolbar()
@@ -139,6 +143,17 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
 
     private func configureToolbar() {
         toolbarItems.removeAll()
+        ratingFilterMenu.removeAllItems()
+        ratingFilterMenu.controlSize = .small
+        ratingFilterMenu.font = .systemFont(ofSize: 11)
+        ratingFilterMenu.setAccessibilityLabel("按评分筛选照片")
+        for filter in [RatingFilter.all] + (0...9).map({ .exact($0) }) + (1...9).map({ .atLeast($0) }) {
+            ratingFilterMenu.addItem(withTitle: filter.title)
+            ratingFilterMenu.lastItem?.representedObject = filter.stored
+        }
+        ratingFilterMenu.target = self
+        ratingFilterMenu.action = #selector(chooseRatingFilter)
+        ratingFilterMenu.frame = NSRect(x: 0, y: 0, width: 112, height: 26)
         search.placeholderString = "搜索"
         search.sendsSearchStringImmediately = true
         search.sendsWholeSearchString = false
@@ -173,9 +188,9 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         if state.mode == .empty { return [.flexibleSpace, .init("title"), .flexibleSpace] }
         let items = state.mode == .viewer
             ? ["back", "grid", "title", NSToolbarItem.Identifier.flexibleSpace.rawValue,
-               "zoom", "fit", "rotate", "favorite", "share", "inspector", "fullscreen", "more"]
+               "zoom", "fit", "rotate", "rating", "favorite", "share", "inspector", "fullscreen", "more"]
             : ["sidebar", "back", "forward", "title", NSToolbarItem.Identifier.flexibleSpace.rawValue,
-               "viewMode", "sort", "share", "search"]
+               "viewMode", "ratingFilter", "sort", "share", "search"]
         return items.map { NSToolbarItem.Identifier($0) }
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
@@ -189,6 +204,8 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         case "title": item.view = titleView; item.label = "当前文件夹"
         case "viewMode": item.view = viewMode; item.label = "显示方式"
         case "sort": configure(item, symbol: "arrow.up.arrow.down", label: "排序", action: #selector(showSort))
+        case "ratingFilter": item.view = ratingFilterMenu; item.label = "评分筛选"
+        case "rating": configure(item, symbol: "star", label: "照片评分", action: #selector(showRatingMenu))
         case "share": configure(item, symbol: "square.and.arrow.up", label: "共享", action: #selector(share))
         case "search":
             let searchItem = item as! NSSearchToolbarItem
@@ -238,6 +255,8 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         toolbarItems["sidebar"]?.isEnabled = state.mode != .empty
         (toolbarItems["favorite"]?.view as? NSButton)?.image = NSImage(systemSymbolName: state.isFavorite ? "heart.fill" : "heart", accessibilityDescription: "收藏")
         toolbarItems["favorite"]?.toolTip = state.isFavorite ? "取消收藏（⌘D）" : "收藏（⌘D）"
+        toolbarItems["rating"]?.toolTip = "评分：\(PhotoRating(state.selectedRating).title)（⌃0～9）"
+        (toolbarItems["rating"]?.view as? NSButton)?.image = NSImage(systemSymbolName: state.selectedRating == 0 ? "star" : "star.fill", accessibilityDescription: "评分")
         for item in toolbarItems.values {
             if let button = item.view as? ActionButton { button.isEnabled = item.isEnabled }
         }
@@ -268,6 +287,33 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     @objc func forward(_ sender: Any?) { state.goForward() }
     @objc func favorite(_ sender: Any?) { state.toggleFavorite() }
+    @objc func assignRating(_ item: NSMenuItem) { state.setRating(item.tag) }
+    @objc private func chooseRatingFilter() {
+        if let value = ratingFilterMenu.selectedItem?.representedObject as? String { state.setRatingFilter(RatingFilter(stored: value)) }
+    }
+    func ratingMenu() -> NSMenu {
+        let menu = NSMenu(title: "评分")
+        menu.delegate = self
+        for score in 0...9 {
+            let item = NSMenuItem(title: PhotoRating(score).title, action: #selector(assignRating), keyEquivalent: "\(score)")
+            item.keyEquivalentModifierMask = .control
+            item.tag = score
+            item.target = self
+            item.state = score == state.selectedRating ? .on : .off
+            item.isEnabled = state.selectedPhoto != nil
+            menu.addItem(item)
+        }
+        return menu
+    }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items where item.action == #selector(assignRating) {
+            item.state = item.tag == state.selectedRating ? .on : .off
+            item.isEnabled = state.selectedPhoto != nil
+        }
+    }
+    @objc private func showRatingMenu() {
+        if let view = window?.contentView { ratingMenu().popUp(positioning: nil, at: window?.mouseLocationOutsideOfEventStream ?? .zero, in: view) }
+    }
     @objc func toggleInspector(_ sender: Any?) { state.toggleInspector() }
     @objc func zoomIn(_ sender: Any?) { viewer.canvas.zoom(by: 1.25) }
     @objc func zoomOut(_ sender: Any?) { viewer.canvas.zoom(by: 1 / 1.25) }
@@ -339,7 +385,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
 
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
-        case #selector(openSelected), #selector(favorite), #selector(share), #selector(showInFinder), #selector(toggleFullscreen): return state.selectedPhoto != nil
+        case #selector(openSelected), #selector(favorite), #selector(share), #selector(showInFinder), #selector(toggleFullscreen), #selector(assignRating): return state.selectedPhoto != nil
         case #selector(zoomIn), #selector(zoomOut), #selector(fitImage), #selector(actualSize), #selector(rotateImage), #selector(toggleInspector): return state.mode == .viewer
         case #selector(back): return state.mode == .viewer || state.canGoBack
         case #selector(forward): return state.canGoForward
@@ -349,8 +395,13 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         }
     }
     private func handleKey(_ event: NSEvent) -> NSEvent? {
-        guard event.window === window, !(window?.firstResponder is NSTextView),
-              event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
+        guard event.window === window, !(window?.firstResponder is NSTextView) else { return event }
+        if event.modifierFlags.contains(.control), event.modifierFlags.intersection([.command, .option, .shift]).isEmpty,
+           let characters = event.charactersIgnoringModifiers, characters.count == 1, let score = Int(characters) {
+            state.setRating(score)
+            return nil
+        }
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
         if event.keyCode == 53 {
             if !state.query.isEmpty && state.mode == .browser { state.setQuery("") }
             else if state.mode == .viewer { back(nil) }

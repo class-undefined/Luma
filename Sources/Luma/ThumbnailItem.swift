@@ -17,6 +17,13 @@ final class ThumbnailView: FlippedView {
     let preview = CroppedImageView()
     let selectionRing = NSView()
     let filename = label(size: 12)
+    let ratingBadge = label(size: 10, color: .white, weight: .medium)
+    var rating = 0 {
+        didSet {
+            ratingBadge.stringValue = "★ \(rating)"
+            ratingBadge.isHidden = rating == 0
+        }
+    }
     var photo: Photo? { didSet { needsLayout = true; setAccessibilityLabel(photo?.name) } }
     var selected = false { didSet { updateSelection() } }
     var filmstrip = false
@@ -37,6 +44,13 @@ final class ThumbnailView: FlippedView {
         addSubview(selectionRing)
         addSubview(preview)
         addSubview(filename)
+        ratingBadge.alignment = .center
+        ratingBadge.wantsLayer = true
+        ratingBadge.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.65).cgColor
+        ratingBadge.layer?.cornerRadius = 5
+        ratingBadge.layer?.masksToBounds = true
+        ratingBadge.isHidden = true
+        addSubview(ratingBadge)
         setAccessibilityElement(true)
         setAccessibilityRole(.image)
     }
@@ -60,6 +74,7 @@ final class ThumbnailView: FlippedView {
         filename.stringValue = filmstrip ? (photo?.name as NSString?)?.deletingPathExtension ?? "" : photo?.name ?? ""
         let nameWidth = min(bounds.width, filename.intrinsicContentSize.width + 16)
         filename.frame = NSRect(x: (bounds.width - nameWidth) / 2, y: maxHeight + 5, width: nameWidth, height: filmstrip ? 16 : 22)
+        ratingBadge.frame = NSRect(x: 8, y: 7, width: 36, height: 18)
     }
 }
 
@@ -69,10 +84,11 @@ final class ThumbnailItem: NSCollectionViewItem {
     override func loadView() { view = ThumbnailView(frame: .zero) }
     override var isSelected: Bool { didSet { if isViewLoaded { thumbnail.selected = isSelected } } }
 
-    func configure(_ photo: Photo, filmstrip: Bool = false) {
+    func configure(_ photo: Photo, filmstrip: Bool = false, rating: Int = 0) {
         imageTask?.cancel()
         thumbnail.photo = photo
         thumbnail.filmstrip = filmstrip
+        thumbnail.rating = rating
         thumbnail.selected = isSelected
         thumbnail.preview.image = nil
         imageTask = Task { [weak self] in

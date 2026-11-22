@@ -127,7 +127,7 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
                 self?.layout.invalidateLayout()
             }
 
-        let columns = [("name", "名称", CGFloat(380)), ("dimensions", "尺寸", 170), ("size", "大小", 100), ("kind", "种类", 80)]
+        let columns = [("name", "名称", CGFloat(380)), ("rating", "评分", 80), ("dimensions", "尺寸", 170), ("size", "大小", 100), ("kind", "种类", 80)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: .init(id))
             column.title = title
@@ -175,8 +175,11 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
         photos = state.visiblePhotos
         if changed {
             collection.reloadData()
-            table.reloadData()
             layout.invalidateLayout()
+        }
+        table.reloadData()
+        for case let item as ThumbnailItem in collection.visibleItems() {
+            if let photo = item.thumbnail.photo { item.thumbnail.rating = state.rating(for: photo.id) }
         }
         updatePreferences()
         updateSelection()
@@ -186,7 +189,7 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
             else { gridScroll.contentView.scroll(to: .zero); gridScroll.reflectScrolledClipView(gridScroll.contentView) }
         }
         empty.heading.stringValue = state.query.isEmpty ? "没有图像" : "没有匹配的图像"
-        empty.detail.stringValue = state.query.isEmpty ? "打开其他文件夹，或将图片拖入窗口。" : "试试其他文件名，或清空搜索。"
+        empty.detail.stringValue = state.ratingFilter != .all ? "没有符合评分条件的照片，可切换为全部评分。" : state.query.isEmpty ? "打开其他文件夹，或将图片拖入窗口。" : "试试其他文件名，或清空搜索。"
         empty.open.isHidden = !state.query.isEmpty
         empty.shortcut.isHidden = !state.query.isEmpty
     }
@@ -255,7 +258,7 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int { photos.count }
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         let item = collectionView.makeItem(withIdentifier: .init("photo"), for: indexPath) as! ThumbnailItem
-        item.configure(photos[indexPath.item])
+        item.configure(photos[indexPath.item], rating: state.rating(for: photos[indexPath.item].id))
         return item
     }
     func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
@@ -282,6 +285,7 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
         default:
             let value: String
             switch tableColumn?.identifier.rawValue {
+            case "rating": value = PhotoRating(state.rating(for: photo.id)).title
             case "dimensions": value = "\(photo.metadata.pixelWidth) × \(photo.metadata.pixelHeight)"
             case "size": value = photo.metadata.fileSize
             default: value = photo.metadata.format

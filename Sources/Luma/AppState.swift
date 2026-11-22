@@ -29,6 +29,8 @@ final class AppState {
     private(set) var listMode: Bool
     private(set) var sidebarVisible: Bool
     private(set) var inspectorVisible: Bool
+    private(set) var ratings: [String: Int]
+    private(set) var ratingFilter: RatingFilter
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = UUID()
     private struct Location {
@@ -68,6 +70,8 @@ final class AppState {
         folders = (defaults.stringArray(forKey: "folders") ?? []).map { URL(fileURLWithPath: $0) }
         favoritePaths = Set(defaults.stringArray(forKey: "favorites") ?? [])
         recentPaths = defaults.stringArray(forKey: "recents") ?? []
+        ratings = (defaults.dictionary(forKey: "ratings") ?? [:]).compactMapValues { ($0 as? NSNumber).map { PhotoRating($0.intValue).value } }
+        ratingFilter = RatingFilter(stored: defaults.string(forKey: "ratingFilter") ?? "all")
     }
 
     func setSize(_ size: ThumbnailSize) {
@@ -108,8 +112,8 @@ final class AppState {
         let previousIndex = selectedIndex ?? 0
         visiblePhotos = sort.sorted(allPhotos.filter {
             (query.isEmpty || $0.name.localizedStandardContains(query)) &&
-            (source != .favorites || favoritePaths.contains($0.id))
-        })
+            (source != .favorites || favoritePaths.contains($0.id)) && ratingFilter.includes(rating(for: $0.id))
+        }, ratings: ratings)
         if !visiblePhotos.contains(where: { $0.id == selectedID }) {
             selectedID = visiblePhotos.isEmpty ? nil : visiblePhotos[min(previousIndex, visiblePhotos.count - 1)].id
         }
@@ -121,6 +125,22 @@ final class AppState {
         guard id == nil || visiblePhotos.contains(where: { $0.id == id }), id != selectedID else { return }
         selectedID = id
         onChange?(.selection)
+    }
+
+    func rating(for id: String) -> Int { ratings[id] ?? 0 }
+    var selectedRating: Int { selectedID.map { rating(for: $0) } ?? 0 }
+    func setRating(_ score: Int, for id: String? = nil) {
+        guard let id = id ?? selectedID, allPhotos.contains(where: { $0.id == id }) else { return }
+        let value = PhotoRating(score).value
+        guard rating(for: id) != value else { return }
+        if value == 0 { ratings.removeValue(forKey: id) } else { ratings[id] = value }
+        defaults.set(ratings, forKey: "ratings")
+        filter()
+    }
+    func setRatingFilter(_ filter: RatingFilter) {
+        ratingFilter = filter
+        defaults.set(filter.stored, forKey: "ratingFilter")
+        self.filter()
     }
 
     func navigate(_ delta: Int) {

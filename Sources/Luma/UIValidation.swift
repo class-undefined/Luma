@@ -35,8 +35,8 @@ enum UIValidation {
                 process.waitUntilExit()
                 if process.terminationStatus != 0 { throw Failure(message: "Window capture failed") }
             }
-            @MainActor func key(_ code: UInt16, characters: String) {
-                let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            @MainActor func key(_ code: UInt16, characters: String, modifiers: NSEvent.ModifierFlags = []) {
+                let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
                     timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: controller.window!.windowNumber,
                     context: nil, characters: characters, charactersIgnoringModifiers: characters,
                     isARepeat: false, keyCode: code)!
@@ -121,6 +121,15 @@ enum UIValidation {
                 controller.openSelected(nil)
                 await settle(700)
                 try check(controller.state.mode == .viewer && controller.viewer.canvas.image != nil, "Viewer decodes the selected original")
+                key(28, characters: "8", modifiers: .control)
+                await settle()
+                try check(controller.state.selectedRating == 8 && controller.state.selectedID == selected, "Control 8 grades the current photo without moving selection")
+                try check(AppState(defaults: controller.state.defaults).rating(for: selected!) == 8, "Photo rating survives preference reconstruction")
+                key(29, characters: "0", modifiers: .control)
+                await settle()
+                try check(controller.state.selectedRating == 0, "Control 0 clears the photo rating")
+                key(28, characters: "8", modifiers: .control)
+                await settle()
                 let fit = controller.viewer.canvas.scale
                 controller.zoomIn(nil)
                 try check(controller.viewer.canvas.scale > fit, "Viewer zoom changes rendered scale")
@@ -147,6 +156,25 @@ enum UIValidation {
                 await settle()
                 try check(controller.state.mode == .browser && controller.state.selectedID == selected, "Returning to browser preserves selection")
                 try check(controller.window?.toolbar?.isVisible == true, "Browser toolbar stays visible after fullscreen round trip")
+                let other = controller.state.allPhotos[0].id
+                controller.state.setRating(5, for: other)
+                controller.state.setRatingFilter(.atLeast(6))
+                try check(controller.state.visiblePhotos.count == 1 && controller.state.selectedID == selected, "Minimum score filter retains matching rated photos")
+                controller.openSelected(nil)
+                controller.state.setRating(5)
+                try check(controller.state.visiblePhotos.isEmpty && controller.state.mode == .browser, "Grading below an active filter leaves a valid empty browser")
+                controller.state.setRatingFilter(.all)
+                controller.state.select(selected)
+                controller.state.setRating(8)
+                if let item = controller.ratingFilterMenu.itemArray.first(where: { $0.representedObject as? String == "exact:5" }) { controller.ratingFilterMenu.select(item) }
+                _ = controller.ratingFilterMenu.sendAction(controller.ratingFilterMenu.action, to: controller.ratingFilterMenu.target)
+                try check(controller.state.visiblePhotos.count == 1 && controller.state.selectedID == other, "Native score filter menu selects an exact grade")
+                controller.state.setRatingFilter(.all)
+                controller.state.select(selected)
+                controller.state.setSort(.rating)
+                try check(controller.state.visiblePhotos.first?.id == selected, "Rating sort puts the highest grade first")
+                controller.state.setSort(.name)
+                try await snapshot("07-ratings")
                 controller.window?.appearance = NSAppearance(named: .darkAqua)
                 try await snapshot("06-dark-browser")
                 controller.window?.appearance = nil
