@@ -265,9 +265,20 @@ final class GalleryViewController: NSViewController, NSCollectionViewDataSource,
             cell.imageView = image
             Task { [weak image] in image?.image = await ImagePipeline.shared.image(for: photo, maxPixels: 160) }
             return cell
-        case "dimensions": return label("\(photo.metadata.pixelWidth) × \(photo.metadata.pixelHeight)", color: .secondaryLabelColor)
-        case "size": return label(photo.metadata.fileSize, color: .secondaryLabelColor)
-        default: return label(photo.metadata.format, color: .secondaryLabelColor)
+        default:
+            let value: String
+            switch tableColumn?.identifier.rawValue {
+            case "dimensions": value = "\(photo.metadata.pixelWidth) × \(photo.metadata.pixelHeight)"
+            case "size": value = photo.metadata.fileSize
+            default: value = photo.metadata.format
+            }
+            let cell = NSTableCellView()
+            let text = label(value, color: .secondaryLabelColor)
+            text.frame = NSRect(x: 8, y: 17, width: max(50, (tableColumn?.width ?? 100) - 16), height: 18)
+            text.autoresizingMask = [.width]
+            cell.addSubview(text)
+            cell.textField = text
+            return cell
         }
     }
     func tableViewSelectionDidChange(_ notification: Notification) {

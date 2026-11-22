@@ -35,6 +35,13 @@ enum UIValidation {
                 process.waitUntilExit()
                 if process.terminationStatus != 0 { throw Failure(message: "Window capture failed") }
             }
+            @MainActor func key(_ code: UInt16, characters: String) {
+                let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: controller.window!.windowNumber,
+                    context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                    isARepeat: false, keyCode: code)!
+                NSApp.postEvent(event, atStart: false)
+            }
             do {
                 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
                 try await snapshot("00-empty")
@@ -69,6 +76,18 @@ enum UIValidation {
                 try check(anchor?.id == restored?.id && abs((anchor?.offset ?? 0) - (restored?.offset ?? 0)) < 2,
                           "Resize preserves selected visual anchor and scroll offset")
                 controller.state.setSize(.medium)
+                controller.status.slider.integerValue = 1
+                _ = controller.status.slider.sendAction(controller.status.slider.action, to: controller.status.slider.target)
+                try check(controller.state.thumbnailSize == .small, "Native slider action changes the size preference")
+                controller.status.sizeMenu.selectItem(at: 2)
+                _ = controller.status.sizeMenu.sendAction(controller.status.sizeMenu.action, to: controller.status.sizeMenu.target)
+                try check(controller.state.thumbnailSize == .medium, "Native size menu action changes the shared preference")
+                controller.status.larger.performClick(nil)
+                try check(controller.state.thumbnailSize == .large, "Size step button advances exactly one level")
+                let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0)!
+                wheel.flags = .maskControl
+                controller.gallery.gridScroll.scrollWheel(with: NSEvent(cgEvent: wheel)!)
+                try check(controller.state.thumbnailSize == .medium, "Control wheel event reaches native gallery size handling")
                 controller.state.setListMode(true)
                 await settle()
                 try check(!controller.gallery.listScroll.isHidden, "Native list view opens")
@@ -97,9 +116,9 @@ enum UIValidation {
                 try check(controller.viewer.canvas.quarterTurns == 1, "Rotation changes the canvas without writing the source")
                 controller.rotateImage(nil); controller.rotateImage(nil); controller.rotateImage(nil)
                 try await snapshot("03-viewer")
-                controller.state.navigate(1)
+                key(124, characters: "\u{F703}")
                 await settle(300)
-                try check(controller.state.selectedID != selected, "Arrow navigation changes the selected image")
+                try check(controller.state.selectedID != selected, "Arrow key event changes the selected image")
                 controller.state.select(selected)
                 controller.slideshow(nil)
                 try check(controller.viewer.isPlaying, "Slideshow starts")
@@ -108,18 +127,40 @@ enum UIValidation {
                 await settle(1300)
                 try check(controller.isFullscreen && controller.viewer.isFullscreen, "Native fullscreen enables the glass controls")
                 try await snapshot("04-fullscreen")
-                controller.back(nil)
+                key(53, characters: "\u{1B}")
                 await settle(1200)
-                try check(!controller.isFullscreen && controller.state.mode == .viewer, "Exiting fullscreen restores the viewer window")
-                controller.back(nil)
+                try check(!controller.isFullscreen && controller.state.mode == .viewer, "Escape exits fullscreen and restores the viewer window")
+                try check(controller.window?.toolbar?.isVisible == true, "Viewer toolbar returns after fullscreen animation")
+                key(53, characters: "\u{1B}")
                 await settle()
                 try check(controller.state.mode == .browser && controller.state.selectedID == selected, "Returning to browser preserves selection")
+                try check(controller.window?.toolbar?.isVisible == true, "Browser toolbar stays visible after fullscreen round trip")
+                controller.window?.appearance = NSAppearance(named: .darkAqua)
+                try await snapshot("06-dark-browser")
+                controller.window?.appearance = nil
                 controller.state.showFavorites()
                 try await loaded()
                 try check(controller.state.visiblePhotos.count == 1, "Favorites view reads persisted file URLs")
+                controller.back(nil)
+                try check(controller.state.source == .demo && controller.state.selectedID == selected, "Back restores library selection")
+                controller.forward(nil)
+                try check(controller.state.source == .favorites, "Forward restores the favorites library")
                 controller.state.toggleFavorite()
                 try check(controller.state.visiblePhotos.isEmpty, "Removing the last favorite leaves a valid empty state")
                 try await snapshot("05-empty-favorites")
+                let fixtures = output.appendingPathComponent("Fixtures")
+                try FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
+                for (index, photo) in controller.state.allPhotos.prefix(1).enumerated() {
+                    let target = fixtures.appendingPathComponent("image\(index + 1).jpg")
+                    if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+                    try FileManager.default.copyItem(at: photo.url, to: target)
+                }
+                let target = fixtures.appendingPathComponent("image1.jpg")
+                controller.state.open([target])
+                try await loaded()
+                await settle(200)
+                try check(controller.state.mode == .viewer && controller.state.selectedPhoto?.url == target, "Opening a local file selects it in the native viewer")
+                try check(controller.state.recentPaths.contains(target.path), "Local file opening updates recent items")
                 try ("PASS\n" + passed.joined(separator: "\n") + "\n").write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
                 controller.state.defaults.removePersistentDomain(forName: domain)
                 print("Luma UI validation passed: \(passed.count) checks. Evidence: \(output.path)")

@@ -216,7 +216,7 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
         spinner.startAnimation(nil)
         imageTask?.cancel()
         imageTask = Task { [weak self] in
-            let image = await ImagePipeline.shared.image(for: photo, maxPixels: 8192)
+            let image = await ImagePipeline.shared.image(for: photo, maxPixels: max(photo.metadata.pixelWidth, photo.metadata.pixelHeight))
             guard let self, !Task.isCancelled, self.displayedID == photo.id else { return }
             self.canvas.image = image
             self.background.image = image

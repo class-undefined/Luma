@@ -1,5 +1,6 @@
 import AppKit
 import LumaCore
+import UniformTypeIdentifiers
 
 final class WorkspaceView: FlippedView {
     var onLayout: (() -> Void)?
@@ -44,7 +45,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         window.toolbarStyle = .unified
         window.minSize = NSSize(width: 880, height: 580)
         window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("LumaMainWindow")
+        if state.defaults === UserDefaults.standard { window.setFrameAutosaveName("LumaMainWindow") }
         window.contentView = root
         root.addSubview(workspace)
         workspace.autoresizingMask = [.width, .height]
@@ -106,6 +107,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         if modeChanged {
             lastMode = state.mode
             window?.appearance = viewing ? NSAppearance(named: .darkAqua) : nil
+            viewer.isFullscreen = viewing && isFullscreen
             configureToolbar()
             if !viewing { viewer.stopSlideshow() }
         }
@@ -130,7 +132,10 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         status.update()
         layoutWorkspace()
         validateToolbar()
-        if modeChanged && !viewing { gallery.updateSelection(reveal: true) }
+        if modeChanged && !viewing {
+            gallery.updateSelection(reveal: true)
+            if state.mode == .browser { window?.makeFirstResponder(state.listMode ? gallery.table : gallery.collection) }
+        }
     }
 
     private func configureToolbar() {
@@ -159,6 +164,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window?.toolbar = toolbar
+        toolbar.isVisible = !(isFullscreen && state.mode == .viewer)
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
@@ -173,7 +179,8 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        let item: NSToolbarItem = itemIdentifier.rawValue == "search"
+            ? NSSearchToolbarItem(itemIdentifier: itemIdentifier) : NSToolbarItem(itemIdentifier: itemIdentifier)
         switch itemIdentifier.rawValue {
         case "sidebar": configure(item, symbol: "sidebar.left", label: "切换侧边栏", action: #selector(toggleSidebar))
         case "back": configure(item, symbol: "chevron.left", label: "返回", action: #selector(back))
@@ -182,7 +189,11 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         case "viewMode": item.view = viewMode; item.label = "显示方式"
         case "sort": configure(item, symbol: "arrow.up.arrow.down", label: "排序", action: #selector(showSort))
         case "share": configure(item, symbol: "square.and.arrow.up", label: "共享", action: #selector(share))
-        case "search": item.view = search; item.label = "搜索"
+        case "search":
+            let searchItem = item as! NSSearchToolbarItem
+            searchItem.searchField = search
+            searchItem.preferredWidthForSearchField = 240
+            item.label = "搜索"
         case "grid": configure(item, symbol: "square.grid.2x2", label: "返回图库", action: #selector(back))
         case "fit": configure(item, symbol: "rectangle.expand.vertical", label: "适合窗口", action: #selector(fitImage))
         case "rotate": configure(item, symbol: "arrow.counterclockwise", label: "向左旋转", action: #selector(rotateImage))
@@ -238,6 +249,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.image]
         panel.beginSheetModal(for: window!) { [weak self] response in
             if response == .OK { self?.state.open(panel.urls) }
         }
@@ -274,7 +286,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     @objc func decreaseThumbnails(_ sender: Any?) { state.stepSize(-1) }
     @objc func focusSearch(_ sender: Any?) {
         if state.mode == .viewer { state.showBrowser() }
-        window?.makeFirstResponder(search)
+        (toolbarItems["search"] as? NSSearchToolbarItem)?.beginSearchInteraction()
     }
     @objc private func showMore(_ sender: Any?) {
         if let view = window?.contentView {
@@ -291,7 +303,10 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     @objc private func searchChanged() { state.setQuery(search.stringValue) }
     func controlTextDidChange(_ obj: Notification) { if obj.object as? NSSearchField === search { searchChanged() } }
-    @objc private func changeViewMode() { state.setListMode(viewMode.selectedSegment == 1) }
+    @objc private func changeViewMode() {
+        state.setListMode(viewMode.selectedSegment == 1)
+        window?.makeFirstResponder(state.listMode ? gallery.table : gallery.collection)
+    }
     @objc private func showSort(_ sender: Any?) {
         let menu = NSMenu()
         for sort in PhotoSort.allCases {
@@ -370,5 +385,9 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         layoutWorkspace()
     }
     func windowWillClose(_ notification: Notification) { viewer.stopSlideshow() }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        window?.toolbar?.isVisible = true
+        layoutWorkspace()
+    }
     deinit { if let keyMonitor { NSEvent.removeMonitor(keyMonitor) } }
 }
