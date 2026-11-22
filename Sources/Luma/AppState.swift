@@ -31,6 +31,9 @@ final class AppState {
     private(set) var inspectorVisible: Bool
     private(set) var ratings: [String: Int]
     private(set) var ratingFilter: RatingFilter
+    private(set) var preferences: AppPreferences
+    private(set) var viewerStyle: ViewerStyle = .details
+    var isImageOnly: Bool { mode == .viewer && viewerStyle == .imageOnly }
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = UUID()
     private struct Location {
@@ -62,6 +65,7 @@ final class AppState {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        preferences = AppPreferences(defaults: defaults)
         thumbnailSize = ThumbnailSize(clamping: defaults.object(forKey: "thumbnailSize") as? Int ?? 2)
         sort = PhotoSort(rawValue: defaults.string(forKey: "sort") ?? "") ?? .name
         listMode = defaults.bool(forKey: "listMode")
@@ -82,6 +86,21 @@ final class AppState {
     }
 
     func stepSize(_ delta: Int) { setSize(thumbnailSize.stepping(delta)) }
+
+    func updatePreferences(_ update: (inout AppPreferences) -> Void) {
+        var updated = preferences
+        update(&updated)
+        guard updated != preferences else { return }
+        preferences = updated
+        updated.save(to: defaults)
+        onChange?(.preferences)
+    }
+
+    func setViewerStyle(_ style: ViewerStyle) {
+        guard selectedPhoto != nil else { return }
+        viewerStyle = style
+        if mode != .viewer { showViewer(style: style) } else { onChange?(.preferences) }
+    }
 
     func setListMode(_ list: Bool) {
         listMode = list
@@ -150,8 +169,9 @@ final class AppState {
         if mode == .viewer { recordRecent() }
     }
 
-    func showViewer() {
+    func showViewer(style: ViewerStyle? = nil) {
         guard selectedPhoto != nil else { return }
+        viewerStyle = style ?? preferences.openMode.viewerStyle
         mode = .viewer
         recordRecent()
         onChange?(.content)
@@ -209,7 +229,7 @@ final class AppState {
             onError?("找不到示例图片，请重新构建应用。")
             return
         }
-        load(urls: [directory], source: .demo, title: "山海之间")
+        load(urls: [directory], source: .demo, title: "山海之间", openViewer: preferences.openMode.opensViewer(singleImage: false))
     }
 
     func showRecent() {
@@ -229,18 +249,26 @@ final class AppState {
         let directory = urls.count == 1 && (try? urls[0].resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         if directory {
             let url = urls[0].standardizedFileURL
-            load(urls: [url], source: .folder(url), title: url.lastPathComponent)
+            load(urls: [url], source: .folder(url), title: url.lastPathComponent,
+                 openViewer: preferences.openMode.opensViewer(singleImage: false))
         } else if urls.count == 1 && ImageLibrary.supports(urls[0]) {
             // Finder's “Open With” keeps neighboring images available for arrow navigation.
             let url = urls[0].standardizedFileURL
             let parent = url.deletingLastPathComponent()
-            load(urls: [parent], source: .folder(parent), title: parent.lastPathComponent, preferred: url.path, openViewer: true)
+            if preferences.loadAdjacentImages {
+                load(urls: [parent], source: .folder(parent), title: parent.lastPathComponent, preferred: url.path,
+                     openViewer: preferences.openMode.opensViewer(singleImage: true), revealingPreferred: true, fallback: url)
+            } else {
+                load(urls: [url], source: .files, title: parent.lastPathComponent, preferred: url.path,
+                     openViewer: preferences.openMode.opensViewer(singleImage: true), revealingPreferred: true)
+            }
         } else {
-            load(urls: urls, source: .files, title: "所选图像")
+            load(urls: urls, source: .files, title: "所选图像", openViewer: preferences.openMode.opensViewer(singleImage: false))
         }
     }
 
     func restoreLastFolder() {
+        guard preferences.restoreLastFolder else { return }
         if let path = defaults.string(forKey: "lastFolder"), FileManager.default.fileExists(atPath: path) {
             open([URL(fileURLWithPath: path)])
         }
@@ -256,13 +284,13 @@ final class AppState {
         let viewing = mode == .viewer
         switch source {
         case .favorites:
-            load(urls: existingURLs(Array(favoritePaths)), source: .favorites, title: "个人收藏", preferred: preferred, openViewer: viewing)
+            load(urls: existingURLs(Array(favoritePaths)), source: .favorites, title: "个人收藏", preferred: preferred, openViewer: viewing, style: viewerStyle)
         case .recent:
-            load(urls: existingURLs(recentPaths), source: .recent, title: "最近打开", preferred: preferred, openViewer: viewing)
+            load(urls: existingURLs(recentPaths), source: .recent, title: "最近打开", preferred: preferred, openViewer: viewing, style: viewerStyle)
         case .folder(let directory):
-            load(urls: [directory], source: .folder(directory), title: directory.lastPathComponent, preferred: preferred, openViewer: viewing)
+            load(urls: [directory], source: .folder(directory), title: directory.lastPathComponent, preferred: preferred, openViewer: viewing, style: viewerStyle)
         case .files:
-            load(urls: existingURLs(allPhotos.map(\.id)) + (url.map { [$0] } ?? []), source: .files, title: title, preferred: preferred, openViewer: viewing)
+            load(urls: existingURLs(allPhotos.map(\.id)) + (url.map { [$0] } ?? []), source: .files, title: title, preferred: preferred, openViewer: viewing, style: viewerStyle)
         case .demo: showDemo()
         }
     }
@@ -311,14 +339,20 @@ final class AppState {
         forwardHistory = forwardHistory.map(rewrite)
     }
 
-    private func load(urls: [URL], source: Source, title: String, preferred: String? = nil, openViewer: Bool = false) {
+    private func load(urls: [URL], source: Source, title: String, preferred: String? = nil, openViewer: Bool = false,
+                      revealingPreferred: Bool = false, fallback: URL? = nil, style: ViewerStyle? = nil) {
         loadTask?.cancel()
         let generation = UUID()
         loadGeneration = generation
         isLoading = true
         onChange?(.loading)
         loadTask = Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) { Result { try ImageLibrary.scan(urls: urls) } }.value
+            let result = await Task.detached(priority: .userInitiated) {
+                Result {
+                    do { return try ImageLibrary.scan(urls: urls) }
+                    catch { if let fallback { return try ImageLibrary.scan(urls: [fallback]) }; throw error }
+                }
+            }.value
             guard let self, !Task.isCancelled, generation == self.loadGeneration else { return }
             self.isLoading = false
             switch result {
@@ -338,6 +372,11 @@ final class AppState {
                 self.skipped = scan.skipped
                 self.selectedID = preferred ?? scan.photos.first?.id
                 self.mode = openViewer && !scan.photos.isEmpty ? .viewer : .browser
+                if self.mode == .viewer { self.viewerStyle = style ?? self.preferences.openMode.viewerStyle }
+                if revealingPreferred, let preferred, !self.ratingFilter.includes(self.rating(for: preferred)) {
+                    self.ratingFilter = .all
+                    self.defaults.set(RatingFilter.all.stored, forKey: "ratingFilter")
+                }
                 if case .demo = source {
                     let names = ["03-mist", "02-cliffs", "04-coast", "01-cove", "05-shore", "06-ocean", "07-waves", "08-beach", "10-rocks", "11-forest", "12-road", "09-water"]
                     self.allPhotos = names.enumerated().compactMap { index, stem in

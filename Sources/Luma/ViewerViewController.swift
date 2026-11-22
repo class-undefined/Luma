@@ -154,8 +154,9 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
     func updateLayout() {
         guard isViewLoaded else { return }
         let bounds = host.bounds
-        let inspectorWidth: CGFloat = !isFullscreen && state.inspectorVisible ? 320 : 0
-        let stripHeight: CGFloat = isFullscreen ? 0 : 94
+        let minimal = state.isImageOnly
+        let inspectorWidth: CGFloat = !isFullscreen && !minimal && state.inspectorVisible ? 320 : 0
+        let stripHeight: CGFloat = isFullscreen || minimal || !state.preferences.showFilmstrip ? 0 : 94
         let width = bounds.width - inspectorWidth
         background.frame = bounds
         canvas.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height - stripHeight)
@@ -163,12 +164,12 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
         filmScroll.frame = filmMaterial.bounds
         inspector.frame = NSRect(x: width, y: 0, width: inspectorWidth, height: bounds.height)
         separator.frame = NSRect(x: width - 1, y: 0, width: 1, height: bounds.height)
-        filmMaterial.isHidden = isFullscreen
+        filmMaterial.isHidden = stripHeight == 0
         inspector.isHidden = inspectorWidth == 0
         separator.isHidden = inspectorWidth == 0
-        hud.isHidden = !isFullscreen
-        filenameGlass.isHidden = !isFullscreen
-        exitButton.isHidden = !isFullscreen
+        hud.isHidden = !isFullscreen || minimal
+        filenameGlass.isHidden = !isFullscreen || minimal
+        exitButton.isHidden = !isFullscreen || minimal
         hud.frame = NSRect(x: (bounds.width - 584) / 2, y: bounds.height - 98, width: 584, height: 56)
         let widths: [CGFloat] = [32, 54, 32, 32, 54, 32, 32, 32, 32, 32, 32]
         var x: CGFloat = 12

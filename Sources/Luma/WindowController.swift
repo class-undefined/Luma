@@ -10,6 +10,8 @@ final class WorkspaceView: FlippedView {
 final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSWindowDelegate, NSUserInterfaceValidations, NSMenuDelegate {
     let state: AppState
     let clipboard: NSPasteboard
+    let defaultApplications: DefaultApplicationSettings
+    private(set) var preferencesController: PreferencesWindowController?
     let root = DropView(frame: .zero)
     let workspace = WorkspaceView(frame: .zero)
     let sidebar: SidebarViewController
@@ -27,12 +29,15 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     private let zoomLabel = label("100%", size: 11)
     let ratingFilterMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private var lastMode: AppState.Mode?
+    private var lastViewerStyle: ViewerStyle?
     private var keyMonitor: Any?
     private(set) var isFullscreen = false
+    private(set) var isTransitioningFullscreen = false
 
-    init(state: AppState, clipboard: NSPasteboard = .general) {
+    init(state: AppState, clipboard: NSPasteboard = .general, defaultApplicationAccess: (any DefaultApplicationAccess)? = nil) {
         self.state = state
         self.clipboard = clipboard
+        defaultApplications = DefaultApplicationSettings(access: defaultApplicationAccess ?? SystemDefaultApplicationAccess(applicationURL: Bundle.main.bundleURL))
         sidebar = SidebarViewController(state: state)
         gallery = GalleryViewController(state: state)
         viewer = ViewerViewController(state: state)
@@ -90,7 +95,8 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         let viewing = state.mode == .viewer
         let immersive = viewing && isFullscreen
         let sidebarWidth: CGFloat = state.sidebarVisible && !emptyMode && !viewing ? 216 : 0
-        let height = bounds.height - (emptyMode || immersive ? 0 : 26)
+        let hideStatus = emptyMode || immersive || state.isImageOnly || (viewing && !state.preferences.showStatusBar)
+        let height = bounds.height - (hideStatus ? 0 : 26)
         sidebar.view.frame = NSRect(x: 0, y: 0, width: sidebarWidth, height: height)
         separator.frame = NSRect(x: sidebarWidth - 1, y: 0, width: 1, height: height)
         gallery.view.frame = NSRect(x: sidebarWidth, y: 0, width: bounds.width - sidebarWidth, height: height)
@@ -101,20 +107,23 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         separator.isHidden = sidebarWidth == 0
         gallery.view.isHidden = emptyMode || viewing
         viewer.view.isHidden = !viewing
-        status.isHidden = emptyMode || immersive
+        status.isHidden = hideStatus
         empty.isHidden = !emptyMode
     }
 
     func update(_ change: AppState.Change) {
         let viewing = state.mode == .viewer
         let modeChanged = lastMode != state.mode
-        if modeChanged {
+        let styleChanged = viewing && lastViewerStyle != state.viewerStyle
+        if modeChanged || styleChanged {
             lastMode = state.mode
+            lastViewerStyle = state.viewerStyle
             window?.appearance = viewing ? NSAppearance(named: .darkAqua) : nil
+            window?.titleVisibility = state.isImageOnly ? .visible : .hidden
             viewer.isFullscreen = viewing && isFullscreen
             configureToolbar()
         }
-        window?.title = state.mode == .empty ? "Luma" : "\(state.selectedPhoto?.name ?? state.title) — Luma"
+        window?.title = state.mode == .empty ? "Luma" : state.isImageOnly ? state.selectedPhoto?.name ?? "Luma" : "\(state.selectedPhoto?.name ?? state.title) — Luma"
         titleLabel.stringValue = viewing ? state.selectedPhoto?.name ?? "Luma" : state.mode == .empty ? "Luma" : state.title
         subtitleLabel.stringValue = state.isLoading ? "正在读取图像…" : state.mode == .empty ? "" : viewing ? state.title : "\(state.visiblePhotos.count) 张图像"
         switch change {
@@ -138,6 +147,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         status.update()
         layoutWorkspace()
         validateToolbar()
+        preferencesController?.refresh()
         if modeChanged && !viewing {
             gallery.updateSelection(reveal: true)
             if state.mode == .browser { window?.makeFirstResponder(state.listMode ? gallery.table : gallery.collection) }
@@ -183,11 +193,12 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window?.toolbar = toolbar
-        toolbar.isVisible = !(isFullscreen && state.mode == .viewer)
+        toolbar.isVisible = !state.isImageOnly && !(isFullscreen && state.mode == .viewer)
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        if state.isImageOnly { return [] }
         if state.mode == .empty { return [.flexibleSpace, .init("title"), .flexibleSpace] }
         let items = state.mode == .viewer
             ? ["back", "grid", "title", NSToolbarItem.Identifier.flexibleSpace.rawValue,
@@ -278,13 +289,24 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         }
     }
     @objc func openDemo(_ sender: Any?) { state.showDemo() }
+    @objc func showPreferences(_ sender: Any?) {
+        if preferencesController == nil { preferencesController = PreferencesWindowController(state: state, defaultApplications: defaultApplications) }
+        preferencesController?.showWindow(nil)
+        preferencesController?.window?.makeKeyAndOrderFront(nil)
+    }
+    @objc func showDefaultViewerSettings(_ sender: Any?) {
+        showPreferences(sender)
+        preferencesController?.tabs.selectedTabViewItemIndex = 2
+    }
     @objc func openSelected(_ sender: Any?) {
         state.showViewer()
         window?.makeFirstResponder(viewer.canvas)
     }
     @objc func toggleSidebar(_ sender: Any?) { state.toggleSidebar() }
     @objc func back(_ sender: Any?) {
+        guard !isTransitioningFullscreen else { return }
         if isFullscreen { window?.toggleFullScreen(nil) }
+        else if state.isImageOnly { state.setViewerStyle(.details) }
         else if state.mode == .viewer { state.showBrowser() }
         else { state.goBack() }
     }
@@ -317,13 +339,23 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     @objc private func showRatingMenu() {
         if let view = window?.contentView { ratingMenu().popUp(positioning: nil, at: window?.mouseLocationOutsideOfEventStream ?? .zero, in: view) }
     }
-    @objc func toggleInspector(_ sender: Any?) { state.toggleInspector() }
+    @objc func toggleInspector(_ sender: Any?) {
+        if state.isImageOnly {
+            state.setViewerStyle(.details)
+            if !state.inspectorVisible { state.toggleInspector() }
+        } else { state.toggleInspector() }
+    }
+    @objc func toggleImageOnly(_ sender: Any?) {
+        state.setViewerStyle(state.isImageOnly ? .details : .imageOnly)
+        window?.makeFirstResponder(viewer.canvas)
+    }
     @objc func zoomIn(_ sender: Any?) { viewer.canvas.zoom(by: 1.25) }
     @objc func zoomOut(_ sender: Any?) { viewer.canvas.zoom(by: 1 / 1.25) }
     @objc func fitImage(_ sender: Any?) { viewer.canvas.fit() }
     @objc func actualSize(_ sender: Any?) { viewer.canvas.actualSize() }
     @objc func rotateImage(_ sender: Any?) { viewer.canvas.rotate() }
     @objc func toggleFullscreen(_ sender: Any?) {
+        guard !isTransitioningFullscreen else { return }
         if state.mode != .viewer { state.showViewer() }
         guard state.hasPhotos else { return }
         window?.toggleFullScreen(nil)
@@ -378,6 +410,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
             menu.addItem(item)
         }
         add("打开图像", #selector(openSelected))
+        add(state.isImageOnly ? "显示照片详情" : "纯图片查看", #selector(toggleImageOnly))
         let grade = NSMenuItem(title: "评分：\(PhotoRating(state.selectedRating).title)", action: nil, keyEquivalent: "")
         grade.submenu = ratingMenu()
         menu.addItem(grade)
@@ -407,6 +440,9 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
 
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
+        case #selector(toggleImageOnly):
+            if let menuItem = item as? NSMenuItem { menuItem.state = state.isImageOnly ? .on : .off }
+            return state.selectedPhoto != nil
         case #selector(copyFile), #selector(copyFileName), #selector(copyFilePath), #selector(openContainingFolder): return state.selectedPhoto != nil
         case #selector(renameFile), #selector(duplicateFile), #selector(moveToTrash): return canModifyPhoto
         case #selector(pasteFiles): return pasteDestination != nil && !copiedFileURLs.isEmpty
@@ -454,6 +490,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         return nil
     }
     func windowWillEnterFullScreen(_ notification: Notification) {
+        isTransitioningFullscreen = true
         isFullscreen = true
         if state.mode == .viewer {
             window?.toolbar?.isVisible = false
@@ -463,29 +500,34 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         layoutWorkspace()
     }
     func windowDidEnterFullScreen(_ notification: Notification) {
+        isTransitioningFullscreen = false
         isFullscreen = true
         if state.mode == .viewer { window?.makeFirstResponder(viewer.canvas) }
     }
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        isTransitioningFullscreen = false
         isFullscreen = false
         viewer.isFullscreen = false
-        window.toolbar?.isVisible = true
+        window.toolbar?.isVisible = !state.isImageOnly
         layoutWorkspace()
     }
     func windowDidFailToExitFullScreen(_ window: NSWindow) {
+        isTransitioningFullscreen = false
         isFullscreen = true
         viewer.isFullscreen = state.mode == .viewer
         window.toolbar?.isVisible = state.mode != .viewer
         layoutWorkspace()
     }
     func windowWillExitFullScreen(_ notification: Notification) {
+        isTransitioningFullscreen = true
         isFullscreen = false
         viewer.isFullscreen = false
-        window?.toolbar?.isVisible = true
+        window?.toolbar?.isVisible = !state.isImageOnly
         layoutWorkspace()
     }
     func windowDidExitFullScreen(_ notification: Notification) {
-        window?.toolbar?.isVisible = true
+        isTransitioningFullscreen = false
+        window?.toolbar?.isVisible = !state.isImageOnly
         layoutWorkspace()
     }
     deinit { if let keyMonitor { NSEvent.removeMonitor(keyMonitor) } }

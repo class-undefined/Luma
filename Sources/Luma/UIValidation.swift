@@ -1,6 +1,19 @@
 #if DEBUG
 import AppKit
 import LumaCore
+import UniformTypeIdentifiers
+
+@MainActor
+final class ValidationApplicationAccess: DefaultApplicationAccess {
+    let applicationURL = Bundle.main.bundleURL
+    private var handlers: [String: URL] = [:]
+    private(set) var requests: [String] = []
+    func defaultApplication(for type: UTType) -> URL? { handlers[type.identifier] ?? URL(fileURLWithPath: "/System/Applications/Preview.app") }
+    func setDefaultApplication(for type: UTType) async throws {
+        requests.append(type.identifier)
+        handlers[type.identifier] = applicationURL
+    }
+}
 
 /// Runs against real AppKit views, with an isolated preferences domain.
 /// Launch the debug executable with --ui-test to write evidence under build/validation.
@@ -24,11 +37,11 @@ enum UIValidation {
                 }
                 throw Failure(message: "Image loading timed out")
             }
-            @MainActor func snapshot(_ name: String) async throws {
-                controller.window?.makeKeyAndOrderFront(nil)
+            @MainActor func snapshot(_ name: String, of target: NSWindow? = nil) async throws {
+                guard let window = target ?? controller.window else { return }
+                window.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
                 await settle(500)
-                guard let window = controller.window else { return }
                 let destination = output.appendingPathComponent("\(name).png")
                 let appkitDestination = output.appendingPathComponent("\(name).appkit.png")
                 for file in [destination, appkitDestination] where FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
@@ -172,7 +185,7 @@ enum UIValidation {
                     controller.window?.makeFirstResponder(controller.viewer.canvas)
                     key(53, characters: "\u{1B}")
                     for _ in 0..<40 {
-                        if !controller.isFullscreen { break }
+                        if !controller.isFullscreen && !controller.isTransitioningFullscreen { break }
                         await settle(100)
                     }
                     await settle(250)
@@ -266,6 +279,87 @@ enum UIValidation {
                 }
                 try check(controller.state.selectedPhoto?.metadata.isRAW == true && controller.viewer.canvas.image != nil, "Genuine Bayer DNG opens and renders in the native detail viewer")
                 try await snapshot("08-raw-viewer")
+                controller.state.updatePreferences { $0.openMode = .imageOnly }
+                controller.state.open([rawURL])
+                try await loaded()
+                await settle()
+                try check(controller.state.isImageOnly && controller.window?.toolbar?.isVisible == false, "Preferred image-only opening hides the native toolbar")
+                try check(controller.status.isHidden && controller.viewer.inspector.isHidden && controller.viewer.filmScroll.superview?.isHidden == true,
+                          "Image-only mode hides status, inspector and filmstrip")
+                try check(controller.window?.titleVisibility == .visible, "Image-only mode keeps the native filename titlebar")
+                try await snapshot("09-image-only")
+                controller.window?.makeFirstResponder(controller.viewer.canvas)
+                key(124, characters: "\u{F703}")
+                await settle()
+                try check(controller.state.selectedPhoto?.url != rawURL, "Image-only mode retains arrow navigation")
+                key(25, characters: "9", modifiers: .control)
+                await settle()
+                try check(controller.state.selectedRating == 9, "Image-only mode retains grading shortcuts")
+                key(53, characters: "\u{1B}")
+                await settle()
+                try check(controller.state.mode == .viewer && !controller.state.isImageOnly && !controller.viewer.inspector.isHidden,
+                          "Escape from image-only restores photo details")
+                controller.state.setRatingFilter(.atLeast(9))
+                controller.state.updatePreferences { $0.loadAdjacentImages = false }
+                controller.state.open([rawURL])
+                try await loaded()
+                try check(controller.state.allPhotos.count == 1 && controller.state.selectedPhoto?.url == rawURL,
+                          "Single-file preference avoids loading adjacent images")
+                try check(controller.state.ratingFilter == .all, "An explicitly opened photo is revealed despite the old rating filter")
+                controller.state.updatePreferences { $0.restoreLastFolder = false }
+                let fresh = AppState(defaults: controller.state.defaults)
+                fresh.restoreLastFolder()
+                try check(fresh.mode == .empty, "Disabling restore leaves a new session empty")
+                controller.state.updatePreferences { $0.openMode = .browser }
+                controller.state.open([rawURL])
+                try await loaded()
+                try check(controller.state.mode == .browser, "Browser preference opens a selected image in the gallery")
+                key(43, characters: ",", modifiers: .command)
+                await settle()
+                guard let preferences = controller.preferencesController else { throw Failure(message: "Settings window did not open") }
+                try check(preferences.window?.isVisible == true, "Command comma opens the native preferences window")
+                preferences.tabs.selectedTabViewItemIndex = 0
+                preferences.general.loadViewIfNeeded()
+                try check(preferences.general.openMode.indexOfSelectedItem == OpenMode.allCases.firstIndex(of: .browser), "General settings show the saved opening policy")
+                preferences.general.openMode.selectItem(at: OpenMode.allCases.firstIndex(of: .imageOnly)!)
+                _ = preferences.general.openMode.sendAction(preferences.general.openMode.action, to: preferences.general.openMode.target)
+                try check(controller.state.preferences.openMode == .imageOnly && controller.state.mode == .browser,
+                          "Opening policy control applies to future opens without switching the current gallery")
+                try check(AppState(defaults: controller.state.defaults).preferences.openMode == .imageOnly, "Open-mode preference survives state reconstruction")
+                preferences.general.adjacent.performClick(nil)
+                try check(controller.state.preferences.loadAdjacentImages, "Adjacent-file checkbox writes the saved preference")
+                try await snapshot("10-settings-general", of: preferences.window)
+                preferences.tabs.selectedTabViewItemIndex = 1
+                preferences.display.loadViewIfNeeded()
+                preferences.display.filmstrip.performClick(nil)
+                preferences.display.inspector.performClick(nil)
+                preferences.display.statusBar.performClick(nil)
+                preferences.display.thumbnailSize.selectItem(at: 1)
+                _ = preferences.display.thumbnailSize.sendAction(preferences.display.thumbnailSize.action, to: preferences.display.thumbnailSize.target)
+                controller.state.showViewer(style: .details)
+                try check(controller.viewer.filmScroll.superview?.isHidden == true && controller.viewer.inspector.isHidden && controller.status.isHidden,
+                          "Display settings immediately hide the selected detail panels")
+                try check(controller.state.thumbnailSize == .small, "Thumbnail preference shares the gallery size state")
+                try await snapshot("11-settings-display", of: preferences.window)
+                preferences.tabs.selectedTabViewItemIndex = 2
+                preferences.associations.loadViewIfNeeded()
+                guard let access = controller.defaultApplications.access as? ValidationApplicationAccess else { throw Failure(message: "Association tests must use the isolated backend") }
+                try check(access.requests.isEmpty, "Opening default-viewer settings does not change any file associations")
+                preferences.associations.applyButton.performClick(nil)
+                for _ in 0..<50 {
+                    if controller.defaultApplications.result != nil && !controller.defaultApplications.isApplying { break }
+                    await settle(50)
+                }
+                try check(controller.defaultApplications.result?.failures.isEmpty == true && !access.requests.isEmpty,
+                          "Default-viewer button applies and verifies selected types through the test backend")
+                try check(controller.defaultApplications.isDefault(for: .init(type: .jpeg, title: "JPEG")), "Default-viewer status reflects the confirmed application")
+                let commonTypes = Set(controller.defaultApplications.formats.filter { !$0.isRAW }.map(\.id))
+                try check(Set(access.requests).isSubset(of: commonTypes), "Default-viewer action leaves unselected RAW associations alone")
+                preferences.associations.view.layoutSubtreeIfNeeded()
+                let applyBounds = preferences.associations.applyButton.convert(preferences.associations.applyButton.bounds, to: preferences.associations.view)
+                try check(preferences.associations.view.visibleRect.contains(applyBounds), "Default-viewer action button is fully visible inside the settings pane")
+                try await snapshot("12-settings-associations", of: preferences.window)
+                preferences.close()
                 try ("PASS\n" + passed.joined(separator: "\n") + "\n" + skipped.map { "SKIP: " + $0 }.joined(separator: "\n") + "\n").write(to: output.appendingPathComponent("results.txt"), atomically: true, encoding: .utf8)
                 controller.state.defaults.removePersistentDomain(forName: domain)
                 print("Luma UI validation passed: \(passed.count) checks, \(skipped.count) skipped. Evidence: \(output.path)")

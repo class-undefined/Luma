@@ -1,4 +1,5 @@
 import AppKit
+import LumaCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -9,7 +10,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let validating = CommandLine.arguments.contains("--ui-test")
         let validationDomain = "org.luma.validation.\(UUID().uuidString)"
         let state = AppState(defaults: validating ? UserDefaults(suiteName: validationDomain)! : .standard)
-        let controller = WindowController(state: state, clipboard: validating ? .withUniqueName() : .general)
+        var associationAccess: (any DefaultApplicationAccess)?
+        #if DEBUG
+        if validating { associationAccess = ValidationApplicationAccess() }
+        #endif
+        let controller = WindowController(state: state, clipboard: validating ? .withUniqueName() : .general,
+                                          defaultApplicationAccess: associationAccess)
         self.controller = controller
         buildMenu(controller)
         controller.showWindow(nil)
@@ -44,6 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu(title: "Luma")
         appMenu.addItem(withTitle: "关于 Luma", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
+        let settings = appMenu.addItem(withTitle: "设置…", action: #selector(WindowController.showPreferences(_:)), keyEquivalent: ",")
+        settings.target = controller
+        appMenu.addItem(.separator())
         let services = NSMenuItem(title: "服务", action: nil, keyEquivalent: "")
         services.submenu = NSMenu(title: "服务")
         NSApp.servicesMenu = services.submenu
@@ -72,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let file = submenu("文件")
         add(file, "打开…", #selector(WindowController.openFiles(_:)), "o")
         add(file, "打开示例图库", #selector(WindowController.openDemo(_:)), "o", modifiers: [.command, .shift])
+        add(file, "设为默认照片查看器…", #selector(WindowController.showDefaultViewerSettings(_:)))
         file.addItem(.separator())
         add(file, "在 Finder 中显示", #selector(WindowController.showInFinder(_:)), "r", modifiers: [.command, .shift])
         add(file, "共享…", #selector(WindowController.share(_:)))
@@ -85,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(view, "切换侧边栏", #selector(WindowController.toggleSidebar(_:)), "s", modifiers: [.command, .control])
         add(view, "显示或隐藏信息", #selector(WindowController.toggleInspector(_:)), "i")
         add(view, "全屏", #selector(WindowController.toggleFullscreen(_:)), "f", modifiers: [.command, .control])
+        add(view, "纯图片查看", #selector(WindowController.toggleImageOnly(_:)), "p", modifiers: [.command, .shift])
         view.addItem(.separator())
         add(view, "放大缩略图", #selector(WindowController.increaseThumbnails(_:)), "+", modifiers: [.command, .option])
         add(view, "缩小缩略图", #selector(WindowController.decreaseThumbnails(_:)), "-", modifiers: [.command, .option])
