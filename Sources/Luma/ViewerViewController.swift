@@ -46,7 +46,7 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
     private var hudControls: [NSView] = []
     var isFullscreen = false { didSet { updateLayout() } }
     var onZoom: ((CGFloat) -> Void)?
-    var onShare: (() -> Void)?
+    var onShare: ((NSView) -> Void)?
     var onReveal: (() -> Void)?
     var onToggleFullscreen: (() -> Void)?
     var contextMenu: (() -> NSMenu)?
@@ -132,7 +132,10 @@ final class ViewerViewController: NSViewController, NSCollectionViewDataSource, 
         let plus = button("plus", "放大") { [weak self] in self?.canvas.zoom(by: 1.25) }
         let fit = button("rectangle.expand.vertical", "适合窗口") { [weak self] in self?.canvas.fit() }
         let rotate = button("arrow.counterclockwise", "向左旋转") { [weak self] in self?.canvas.rotate() }
-        let share = button("square.and.arrow.up", "共享") { [weak self] in self?.onShare?() }
+        let share = ActionButton(symbol: "square.and.arrow.up", title: "共享")
+        share.actionHandler = { [weak self, weak share] in
+            if let share { self?.onShare?(share) }
+        }
         let exit = button("arrow.down.right.and.arrow.up.left", "退出全屏") { [weak self] in self?.onToggleFullscreen?() }
         favoriteButton.actionHandler = { [weak self] in self?.state.toggleFavorite() }
         position.alignment = .center

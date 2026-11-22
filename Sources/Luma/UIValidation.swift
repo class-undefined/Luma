@@ -15,6 +15,16 @@ final class ValidationApplicationAccess: DefaultApplicationAccess {
     }
 }
 
+@MainActor
+private final class MenuObservation {
+    var sourceMatches = false
+    var anchorPoint: NSPoint?
+    var frame: CGRect?
+    var usesAccessibilityGeometry = false
+    var timer: Timer?
+    var finished = false
+}
+
 /// Runs against real AppKit views, with an isolated preferences domain.
 /// Launch the debug executable with --ui-test to write evidence under build/validation.
 @MainActor
@@ -69,6 +79,63 @@ enum UIValidation {
                     isARepeat: false, keyCode: code)!
                 NSApp.postEvent(event, atStart: false)
             }
+            @MainActor func toolbarMenu(_ identifier: String) async throws {
+                guard let button = controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == identifier })?.view as? NSButton else {
+                    throw Failure(message: "Missing toolbar menu button: \(identifier)")
+                }
+                let observation = MenuObservation()
+                controller.menuPresenter.onWillPresent = { menu, anchor in
+                    observation.sourceMatches = anchor.view === button
+                    observation.anchorPoint = anchor.screenPoint
+                    let timer = Timer(timeInterval: 0.25, repeats: false) { _ in
+                        MainActor.assumeIsolated {
+                            let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
+                            for window in windows where window[kCGWindowOwnerPID as String] as? Int32 == ProcessInfo.processInfo.processIdentifier &&
+                                (window[kCGWindowLayer as String] as? Int ?? 0) >= NSWindow.Level.popUpMenu.rawValue {
+                                if let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                                   let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary), frame.height > 50 {
+                                    observation.frame = frame
+                                    if let id = window[kCGWindowNumber as String] as? Int, hasActiveDisplay {
+                                        let capture = Process()
+                                        capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                                        capture.arguments = ["-x", "-o", "-l", "\(id)", output.appendingPathComponent("13-menu-\(identifier).png").path]
+                                        try? capture.run()
+                                        capture.waitUntilExit()
+                                    }
+                                    break
+                                }
+                            }
+                            let accessibleFrame = menu.accessibilityFrame()
+                            if !accessibleFrame.isEmpty {
+                                observation.frame = accessibleFrame
+                                observation.usesAccessibilityGeometry = true
+                            }
+                            menu.cancelTrackingWithoutAnimation()
+                            observation.finished = true
+                        }
+                    }
+                    observation.timer = timer
+                    RunLoop.main.add(timer, forMode: .eventTracking)
+                    RunLoop.main.add(timer, forMode: .common)
+                }
+                defer { observation.timer?.invalidate(); controller.menuPresenter.onWillPresent = nil }
+                let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: controller.window!.windowNumber,
+                        context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
+                    NSApp.postEvent(event, atStart: false)
+                }
+                for _ in 0..<50 { if observation.finished { break }; await settle(50) }
+                try check(observation.sourceMatches, "\(identifier) popup is anchored to the actual clicked toolbar button")
+                if hasActiveDisplay {
+                    guard let frame = observation.frame, let point = observation.anchorPoint else { throw Failure(message: "Missing onscreen popup geometry: \(identifier)") }
+                    let top = observation.usesAccessibilityGeometry ? frame.maxY : (NSScreen.screens.first?.frame.maxY ?? 0) - frame.minY
+                    let allowance: CGFloat = observation.usesAccessibilityGeometry ? 30 : 100
+                    try check(abs(top - point.y) < allowance && frame.minX <= point.x + allowance && frame.maxX >= point.x - allowance,
+                              "\(identifier) native popup appears directly below its toolbar button")
+                }
+            }
             do {
                 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
                 try await snapshot("00-empty")
@@ -77,6 +144,7 @@ enum UIValidation {
                 await settle(400)
                 try check(controller.state.visiblePhotos.count == 12, "Demo library loads 12 real images")
                 try check(controller.state.selectedPhoto?.name == "DSCF_2408.jpg", "Initial selection survives collection reload")
+                try await toolbarMenu("sort")
                 let landscape = (controller.gallery.collection.item(at: IndexPath(item: 0, section: 0)) as? ThumbnailItem)?.thumbnail
                 let portrait = (controller.gallery.collection.item(at: IndexPath(item: 6, section: 0)) as? ThumbnailItem)?.thumbnail
                 try check(landscape != nil && portrait != nil && landscape?.preview.frame.size == portrait?.preview.frame.size,
@@ -148,6 +216,13 @@ enum UIValidation {
                 controller.openSelected(nil)
                 await settle(700)
                 try check(controller.state.mode == .viewer && controller.viewer.canvas.image != nil, "Viewer decodes the selected original")
+                try await toolbarMenu("rating")
+                try await toolbarMenu("more")
+                let shareButton = controller.window?.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == "share" })?.view
+                let shareAnchor = controller.menuAnchor(for: shareButton, toolbarItem: "share")
+                try check(shareButton != nil && shareAnchor.view === shareButton && shareAnchor.rect == shareButton?.bounds,
+                          "Sharing uses the clicked control bounds instead of a fixed window coordinate")
+                controller.window?.makeFirstResponder(controller.viewer.canvas)
                 controller.viewer.inspector.layoutSubtreeIfNeeded()
                 try check(controller.viewer.inspector.displayedName == controller.state.selectedPhoto?.name, "Inspector filename matches the selected photo")
                 try check(controller.viewer.inspector.rows.allSatisfy { $0.value.frame.width > 0 && $0.value.frame.maxX <= $0.bounds.width + 1 }, "Inspector values stay within their column bounds")

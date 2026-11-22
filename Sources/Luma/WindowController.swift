@@ -28,6 +28,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     private let separator = NSBox()
     private let zoomLabel = label("100%", size: 11)
     let ratingFilterMenu = NSPopUpButton(frame: .zero, pullsDown: false)
+    let menuPresenter = MenuPresenter()
     private var lastMode: AppState.Mode?
     private var lastViewerStyle: ViewerStyle?
     private var keyMonitor: Any?
@@ -75,7 +76,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         viewer.contextMenu = { [weak self] in self?.photoMenu() ?? NSMenu() }
         viewer.onZoom = { [weak self] scale in self?.zoomLabel.stringValue = "\(Int((scale * 100).rounded()))%" }
         viewer.onReveal = { [weak self] in self?.showInFinder(nil) }
-        viewer.onShare = { [weak self] in self?.share(nil) }
+        viewer.onShare = { [weak self] source in self?.share(source) }
         viewer.onToggleFullscreen = { [weak self] in self?.toggleFullscreen(nil) }
         workspace.onLayout = { [weak self] in self?.layoutWorkspace() }
         state.onChange = { [weak self] change in self?.update(change) }
@@ -250,7 +251,7 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
     }
     private func configure(_ item: NSToolbarItem, symbol: String, label: String, action: Selector) {
         let button = ActionButton(symbol: symbol, title: label, size: state.mode == .viewer ? 13 : 14)
-        button.actionHandler = { [weak self] in _ = self?.perform(action, with: nil) }
+        button.actionHandler = { [weak self, weak button] in _ = self?.perform(action, with: button) }
         button.frame = NSRect(x: 0, y: 0, width: 28, height: 28)
         button.widthAnchor.constraint(equalToConstant: 28).isActive = true
         button.heightAnchor.constraint(equalToConstant: 28).isActive = true
@@ -336,8 +337,8 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
             item.isEnabled = state.selectedPhoto != nil
         }
     }
-    @objc private func showRatingMenu() {
-        if let view = window?.contentView { ratingMenu().popUp(positioning: nil, at: window?.mouseLocationOutsideOfEventStream ?? .zero, in: view) }
+    @objc private func showRatingMenu(_ sender: Any?) {
+        menuPresenter.present(ratingMenu(), at: menuAnchor(for: sender, toolbarItem: "rating"))
     }
     @objc func toggleInspector(_ sender: Any?) {
         if state.isImageOnly {
@@ -367,17 +368,16 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
         (toolbarItems["search"] as? NSSearchToolbarItem)?.beginSearchInteraction()
     }
     @objc private func showMore(_ sender: Any?) {
-        if let view = window?.contentView {
-            photoMenu().popUp(positioning: nil, at: window?.mouseLocationOutsideOfEventStream ?? .zero, in: view)
-        }
+        menuPresenter.present(photoMenu(), at: menuAnchor(for: sender, toolbarItem: "more"))
     }
     @objc func showInFinder(_ sender: Any?) {
         if let photo = state.selectedPhoto { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
     }
     @objc func share(_ sender: Any?) {
-        guard let photo = state.selectedPhoto, let view = window?.contentView else { return }
+        guard let photo = state.selectedPhoto else { return }
+        let anchor = menuAnchor(for: sender, toolbarItem: "share")
         let picker = NSSharingServicePicker(items: [photo.url])
-        picker.show(relativeTo: NSRect(x: view.bounds.maxX - 300, y: view.bounds.maxY - 4, width: 1, height: 1), of: view, preferredEdge: .minY)
+        picker.show(relativeTo: anchor.rect, of: anchor.view, preferredEdge: anchor.preferredEdge)
     }
     @objc private func searchChanged() { state.setQuery(search.stringValue) }
     func controlTextDidChange(_ obj: Notification) { if obj.object as? NSSearchField === search { searchChanged() } }
@@ -394,8 +394,17 @@ final class WindowController: NSWindowController, NSToolbarDelegate, NSSearchFie
             item.state = sort == state.sort ? .on : .off
             menu.addItem(item)
         }
-        let location = window?.mouseLocationOutsideOfEventStream ?? .zero
-        if let view = window?.contentView { menu.popUp(positioning: nil, at: location, in: view) }
+        menuPresenter.present(menu, at: menuAnchor(for: sender, toolbarItem: "sort"))
+    }
+    func menuAnchor(for sender: Any?, toolbarItem: String) -> MenuAnchor {
+        func usable(_ view: NSView?) -> NSView? {
+            guard let view, view.window === window, !view.isHiddenOrHasHiddenAncestor, !view.visibleRect.isEmpty else { return nil }
+            return view
+        }
+        if let view = usable(sender as? NSView) { return MenuAnchor(below: view) }
+        if let item = sender as? NSToolbarItem, let view = usable(item.view) { return MenuAnchor(below: view) }
+        if window?.toolbar?.isVisible == true, let view = usable(toolbarItems[toolbarItem]?.view) { return MenuAnchor(below: view) }
+        return MenuAnchor(fallback: workspace)
     }
     @objc private func chooseSort(_ item: NSMenuItem) {
         if let raw = item.representedObject as? String, let sort = PhotoSort(rawValue: raw) { state.setSort(sort) }
